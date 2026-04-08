@@ -486,8 +486,8 @@ void WBC_priority_V4::computeDdq(Pin_KinDyn_V4 &pinKinDynIn)
         target_arm_q.resize(10);
         // arm_l: shoulder_pitch, shoulder_roll, shoulder_yaw, elbow, wrist_roll
         // arm_r: shoulder_pitch, shoulder_roll, shoulder_yaw, elbow, wrist_roll
-        target_arm_q << 0.475 - 0.75*r_hip_pitch, -1.12, 1.9, 0.86, 0,
-                       -0.475 + 0.75*l_hip_pitch, -1.12, -1.9, 0.86, 0;
+        target_arm_q << 0.3 + 0.75*r_hip_pitch, 1.4, 0, -1.4, 0,
+                       -0.3 - 0.75*l_hip_pitch, -1.4, 0, 1.4, 0;
 
         id = kin_tasks_walk.getId("HandTrackJoints");
         kin_tasks_walk.taskLib[id].errX = Eigen::VectorXd::Zero(10);
@@ -612,7 +612,7 @@ void WBC_priority_V4::computeDdq(Pin_KinDyn_V4 &pinKinDynIn)
         // HandTrackJoints stand: 10 DoF (arm_l 5 + arm_r 5)
         Eigen::VectorXd target_arm_q;
         target_arm_q.resize(10);
-        target_arm_q << 0.475, -1.12, 1.9, 0.86, 0, -0.475, -1.12, -1.9, 0.86, 0;
+        target_arm_q << 0.3, 1.4, 0, -1.4, 0, -0.3, -1.4, 0, 1.4, 0;
 
         id = kin_tasks_stand.getId("HandTrackJoints");
         kin_tasks_stand.taskLib[id].errX = Eigen::VectorXd::Zero(10);

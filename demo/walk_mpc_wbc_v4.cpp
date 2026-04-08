@@ -84,8 +84,8 @@ int main(int argc, char **argv)
     Eigen::VectorXd hd_l_des, hd_r_des;
     hd_l_des.resize(5);
     hd_r_des.resize(5);
-    hd_l_des << 0.475, -1.12, 1.9, 0.86, 0;
-    hd_r_des << -0.475, -1.12, -1.9, 0.86, 0;
+    hd_l_des << 0.3, 1.4, 0, -1.4, 0;
+    hd_r_des << -0.3, -1.4, 0, 1.4, 0;
 
     auto resLeg = kinDynSolver.computeInK_Leg(fe_l_rot_des, fe_l_pos_L_des, fe_r_rot_des, fe_r_pos_L_des);
     Eigen::VectorXd qIniDes = Eigen::VectorXd::Zero(mj_model->nq, 1);

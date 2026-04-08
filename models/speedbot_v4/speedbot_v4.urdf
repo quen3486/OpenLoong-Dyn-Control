@@ -359,7 +359,7 @@
     </visual>
   </link>
   <joint name="left_shoulder_pitch_joint" type="revolute">
-    <origin xyz="0.0080635 0.098693 0.42818" rpy="0 0.3 0" />
+    <origin xyz="0.0080635 0.098693 0.42818" rpy="0 0 0" />
     <parent link="base_link" />
     <child link="left_shoulder_pitch" />
     <axis xyz="0 1 0" />
@@ -382,7 +382,7 @@
     </visual>
   </link>
   <joint name="left_shoulder_roll_joint" type="revolute">
-    <origin xyz="0.0444 0.14081 0.00087012" rpy="-1.4 0 0" />
+    <origin xyz="0.0444 0.14081 0.00087012" rpy="0 0 0" />
     <parent link="left_shoulder_pitch" />
     <child link="left_shoulder_roll" />
     <axis xyz="-1 0 0" />
@@ -428,7 +428,7 @@
     </visual>
   </link>
   <joint name="left_elbow_joint" type="revolute">
-    <origin xyz="0 0.197 0.0135" rpy="0 0 -1.4" />
+    <origin xyz="0 0.197 0.0135" rpy="0 0 0" />
     <parent link="left_shoulder_yaw" />
     <child link="left_elbow" />
     <axis xyz="0 0 1" />
@@ -474,7 +474,7 @@
     </visual>
   </link>
   <joint name="right_shoulder_pitch_joint" type="revolute">
-    <origin xyz="0.0080635 -0.098693 0.42818" rpy="0 0.3 0" />
+    <origin xyz="0.0080635 -0.098693 0.42818" rpy="0 0 0" />
     <parent link="base_link" />
     <child link="right_shoulder_pitch" />
     <axis xyz="0 -1 0" />
@@ -497,7 +497,7 @@
     </visual>
   </link>
   <joint name="right_shoulder_roll_joint" type="revolute">
-    <origin xyz="0.0444 -0.14081 0.00087012" rpy="1.4 0 0" />
+    <origin xyz="0.0444 -0.14081 0.00087012" rpy="0 0 0" />
     <parent link="right_shoulder_pitch" />
     <child link="right_shoulder_roll" />
     <axis xyz="-1 0 0" />
@@ -543,7 +543,7 @@
     </visual>
   </link>
   <joint name="right_elbow_joint" type="revolute">
-    <origin xyz="0 -0.197 0.0135" rpy="0 0 1.4" />
+    <origin xyz="0 -0.197 0.0135" rpy="0 0 0" />
     <parent link="right_shoulder_yaw" />
     <child link="right_elbow" />
     <axis xyz="0 0 1" />
