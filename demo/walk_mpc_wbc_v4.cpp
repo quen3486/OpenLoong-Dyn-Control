@@ -1,6 +1,5 @@
 /*
  * walk_mpc_wbc_v4: MPC + WBC walking demo for speedbot_v4 robot.
- * Adapted from walk_mpc_wbc_joystick.cpp for OpenLoong.
  */
 #include <mujoco/mujoco.h>
 #include <GLFW/glfw3.h>

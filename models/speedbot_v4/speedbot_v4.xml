@@ -72,12 +72,11 @@
                   <joint name="left_ankle_roll_joint" axis="-1 0 0" range="-0.44 0.44" />
                   <inertial mass="0.60538" pos="0.039669 -5.3886E-08 -0.036778" fullinertia="0.00034025 0.0025604 0.0026384 -1.4526e-09 0.00017653 -8.608e-10" />
                   <geom class="visual" pos="0 0 0" euler="0 0 0" rgba="0.69804 0.69804 0.69804 1" type="mesh" mesh="left_ankle_roll" />
-                  <geom class="collision" pos="0.046 0 -0.042" euler="0 0 0" type="box" size="0.225 0.08 0.025" />
                   <body name="left_foot_front_link" pos="0.15 0 -0.052" />
                   <body name="left_foot_mid_link" pos="0.05 -0 -0.052" />
                   <body name="left_foot_hind_link" pos="-0.06 0 -0.052" />
-                  <geom type="box" condim="4" friction="1 1 1" rgba="1 0 0 0" pos="0.045 0 -0.047" size="0.105 0.040 0.006" />
-                  <site name="lf-tc" type="box" size="0.106 0.041 0.007" pos="0.045 0 -0.047" rgba="0 1 0 0" />
+                  <geom type="box" condim="4" friction="1 1 1" rgba="1 0 0 0" pos="0.045 0 -0.027" size="0.105 0.040 0.025" />
+                  <site name="lf-tc" type="box" size="0.106 0.041 0.026" pos="0.045 0 -0.027" rgba="0 1 0 0" />
                 </body>
               </body>
             </body>
@@ -108,12 +107,11 @@
                   <joint name="right_ankle_roll_joint" axis="-1 0 0" range="-0.44 0.44" />
                   <inertial mass="0.60538" pos="0.039669 -5.3901E-08 -0.036778" fullinertia="0.00034025 0.0025604 0.0026384 -1.4509e-09 0.00017653 -8.6104e-10" />
                   <geom class="visual" pos="0 0 0" euler="0 0 0" rgba="0.69804 0.69804 0.69804 1" type="mesh" mesh="right_ankle_roll" />
-                  <geom class="collision" pos="0.046 0 -0.042" euler="0 0 0" type="box" size="0.225 0.08 0.025" />
                   <body name="right_foot_front_link" pos="0.15 0 -0.052" />
                   <body name="right_foot_mid_link" pos="0.05 -0 -0.052" />
                   <body name="right_foot_hind_link" pos="-0.06 0 -0.052" />
-                  <geom type="box" condim="4" friction="1 1 1" rgba="1 0 0 0" pos="0.045 0 -0.047" size="0.105 0.040 0.006" />
-                  <site name="rf-tc" type="box" size="0.106 0.041 0.007" pos="0.045 0 -0.047" rgba="0 1 0 0" />
+                  <geom type="box" condim="4" friction="1 1 1" rgba="1 0 0 0" pos="0.045 0 -0.027" size="0.105 0.040 0.025" />
+                  <site name="rf-tc" type="box" size="0.106 0.041 0.026" pos="0.045 0 -0.027" rgba="0 1 0 0" />
                 </body>
               </body>
             </body>
