@@ -17,6 +17,8 @@
 #include "joystick_interpreter.h"
 #include <string>
 #include <iostream>
+#include <algorithm>
+#include <cmath>
 #include "StateEst.h"
 
 const double dt = 0.001;
@@ -51,7 +53,10 @@ int main(int argc, char **argv)
     // speedbot_v4: leg length ~0.983m, use 0.95 for slight bend; foot height ~0.053m
     double stand_legLength = 0.95;
     double foot_height = 0.053;
-    double xv_des = 0.8;
+    double xv_des = 0.4;
+    const double xv_step = 0.1;  // speed increment per key press
+    const double xv_max = 1.2;
+    const double xv_min = 0.0;   // speed magnitude lower bound
 
     const int robot_nq = kinDynSolver.model_nv + 1;
     const int robot_nv = robot_nq - 1;
@@ -178,14 +183,57 @@ int main(int argc, char **argv)
                         jsInterp.setWzDesLPara(-0.2, 1.0);
                 }
 
+                // W: forward at current xv_des
                 if (buttonState.key_w && RobotState.motionState != DataBus::Stand)
                     jsInterp.setVxDesLPara(xv_des, 2.0);
 
+                // S: backward at current xv_des (negative)
                 if (buttonState.key_s && RobotState.motionState != DataBus::Stand)
+                    jsInterp.setVxDesLPara(-fabs(xv_des), 2.0);
+
+                // J: emergency stop to stand
+                if (buttonState.key_j && RobotState.motionState != DataBus::Stand)
+                {
                     jsInterp.setVxDesLPara(0, 0.5);
+                    jsInterp.setWzDesLPara(0, 0.5);
+                    if (RobotState.motionState == DataBus::Walk)
+                    {
+                        RobotState.motionState = DataBus::Walk2Stand;
+                        jsInterp.setIniPos(RobotState.q(0), RobotState.q(1), RobotState.base_rpy(2));
+                    }
+                    std::cout << "[Joystick] J: stop and stand" << std::endl;
+                }
+
+                // E: increase speed
+                if (buttonState.key_e)
+                {
+                    xv_des = std::min(std::round((xv_des + xv_step) * 10.0) / 10.0, xv_max);
+                    if (RobotState.motionState != DataBus::Stand && std::fabs(jsInterp.vxLGen.yDes) > 1e-3)
+                    {
+                        const double dir = (jsInterp.vxLGen.yDes >= 0.0) ? 1.0 : -1.0;
+                        jsInterp.setVxDesLPara(dir * xv_des, 0.6);
+                    }
+                    std::cout << "[Speed] xv_des=" << xv_des << " m/s" << std::endl;
+                }
+
+                // Q: decrease speed
+                if (buttonState.key_q)
+                {
+                    xv_des = std::max(std::round((xv_des - xv_step) * 10.0) / 10.0, xv_min);
+                    if (RobotState.motionState != DataBus::Stand && std::fabs(jsInterp.vxLGen.yDes) > 1e-3)
+                    {
+                        const double dir = (jsInterp.vxLGen.yDes >= 0.0) ? 1.0 : -1.0;
+                        jsInterp.setVxDesLPara(dir * xv_des, 0.6);
+                    }
+                    std::cout << "[Speed] xv_des=" << xv_des << " m/s" << std::endl;
+                }
 
                 if (buttonState.key_h)
+                {
                     jsInterp.setIniPos(RobotState.q(0), RobotState.q(1), RobotState.base_rpy(2));
+                    jsInterp.setWzDesLPara(0, 0.3);
+                    std::cout << "[Joystick] H: reset heading reference" << std::endl;
+                }
             }
 
             StateModule.set(RobotState);

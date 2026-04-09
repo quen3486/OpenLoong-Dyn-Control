@@ -22,6 +22,8 @@ public:
         bool key_d{false};
         bool key_h{false};
         bool key_j{false};
+        bool key_q{false};
+        bool key_e{false};
         bool key_space{false};
     } buttonRead;
 
