@@ -85,3 +85,6 @@ target_link_libraries(walk_mpc_wbc_joystick core mujoco qpOASES ${sysSimLibs} dl
 
 add_executable(walk_mpc_wbc_v4 demo/walk_mpc_wbc_v4.cpp)
 target_link_libraries(walk_mpc_wbc_v4 core mujoco qpOASES ${sysSimLibs} dl)
+
+add_executable(walk_mpc_wbc_leg demo/walk_mpc_wbc_leg.cpp)
+target_link_libraries(walk_mpc_wbc_leg core mujoco qpOASES ${sysSimLibs} dl)

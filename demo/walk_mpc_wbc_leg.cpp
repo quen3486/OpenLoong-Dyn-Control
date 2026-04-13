@@ -1,0 +1,399 @@
+/*
+ * walk_mpc_wbc_leg: MPC + WBC walking demo for speedbot_v4 leg-only robot.
+ */
+#include <mujoco/mujoco.h>
+#include <GLFW/glfw3.h>
+#include "GLFW_callbacks.h"
+#include "MJ_interface_v4_leg.h"
+#include "PVT_ctrl_v4_leg.h"
+#include "data_logger.h"
+#include "data_bus.h"
+#include "pino_kin_dyn_v4_leg.h"
+#include "useful_math.h"
+#include "wbc_priority_v4_leg.h"
+#include "mpc.h"
+#include "gait_scheduler.h"
+#include "foot_placement.h"
+#include "joystick_interpreter.h"
+#include <string>
+#include <iostream>
+#include <algorithm>
+#include <cmath>
+#include "StateEst.h"
+
+const double dt = 0.001;
+const double dt_200Hz = 0.005;
+char error[1000] = "Could not load binary model";
+mjModel *mj_model = mj_loadXML("../models/scene_v4_leg.xml", 0, error, 1000);
+mjData *mj_data = mj_makeData(mj_model);
+
+int main(int argc, char **argv)
+{
+    // initialize classes
+    UIctr uiController(mj_model, mj_data);
+    MJ_Interface_V4_Leg mj_interface(mj_model, mj_data);
+    Pin_KinDyn_V4_Leg kinDynSolver("../models/speedbot_v4/speedbot_v4_leg.urdf");
+    DataBus RobotState(kinDynSolver.model_nv);
+    WBC_priority_V4_Leg WBC_solv(kinDynSolver.model_nv, 18, 22, 0.7, mj_model->opt.timestep);
+    MPC MPC_solv(dt_200Hz);
+    GaitScheduler gaitScheduler(0.4, mj_model->opt.timestep);
+    PVT_Ctr_V4_Leg pvtCtr(mj_model->opt.timestep, "../common/joint_ctrl_config_v4_leg.json");
+    FootPlacement footPlacement;
+    JoyStickInterpreter jsInterp(mj_model->opt.timestep);
+    DataLogger logger("../record/datalog.log");
+    StateEst StateModule(0.001);
+
+    // initialize UI: GLFW
+    uiController.iniGLFW();
+    uiController.enableTracking();
+    uiController.createWindow("Demo_V4_Leg", false);
+    UIctr::ButtonState buttonState;
+
+    // initialize variables
+    // speedbot_v4: leg length ~0.983m, use 0.95 for slight bend; foot height ~0.053m
+    double stand_legLength = 0.95;
+    double foot_height = 0.053;
+    double xv_des = 0.4;
+    const double xv_step = 0.1;  // speed increment per key press
+    const double xv_max = 1.2;
+    const double xv_min = 0.0;   // speed magnitude lower bound
+
+    const int robot_nq = kinDynSolver.model_nv + 1;
+    const int robot_nv = robot_nq - 1;
+
+    RobotState.width_hips = 0.245;
+    footPlacement.kp_vx = 0.03;
+    footPlacement.kp_vy = 0.03;
+    footPlacement.kp_wz = 0.03;
+    footPlacement.stepHeight = 0.12;
+    footPlacement.legLength = stand_legLength;
+
+    std::vector<double> motors_pos_des(robot_nv - 6, 0);
+    std::vector<double> motors_pos_cur(robot_nv - 6, 0);
+    std::vector<double> motors_vel_des(robot_nv - 6, 0);
+    std::vector<double> motors_vel_cur(robot_nv - 6, 0);
+    std::vector<double> motors_tau_des(robot_nv - 6, 0);
+    std::vector<double> motors_tau_cur(robot_nv - 6, 0);
+
+    // ini position for foot-end
+    // speedbot_v4: hip y offset ≈ ±0.1225, x offset ≈ 0
+    Eigen::Vector3d fe_l_pos_L_des = {0, 0.1225, -stand_legLength};
+    Eigen::Vector3d fe_r_pos_L_des = {0, -0.1225, -stand_legLength};
+    Eigen::Vector3d fe_l_eul_L_des = {0, 0, 0};
+    Eigen::Vector3d fe_r_eul_L_des = {0, 0, 0};
+    Eigen::Matrix3d fe_l_rot_des = eul2Rot(fe_l_eul_L_des(0), fe_l_eul_L_des(1), fe_l_eul_L_des(2));
+    Eigen::Matrix3d fe_r_rot_des = eul2Rot(fe_r_eul_L_des(0), fe_r_eul_L_des(1), fe_r_eul_L_des(2));
+
+    auto resLeg = kinDynSolver.computeInK_Leg(fe_l_rot_des, fe_l_pos_L_des, fe_r_rot_des, fe_r_pos_L_des);
+    Eigen::VectorXd qIniDes = Eigen::VectorXd::Zero(mj_model->nq, 1);
+    qIniDes.block(7, 0, mj_model->nq - 7, 1) = resLeg.jointPosRes;
+    WBC_solv.setQini(qIniDes, RobotState.q);
+
+    // register data logger items
+    logger.addIterm("dyn_time", 1);
+    logger.addIterm("motors_pos_cur", robot_nv - 6);
+    logger.addIterm("motors_pos_des", robot_nv - 6);
+    logger.addIterm("motors_tor_cur", robot_nv - 6);
+    logger.addIterm("motors_tor_des", robot_nv - 6);
+    logger.addIterm("motors_tor_out", robot_nv - 6);
+    logger.addIterm("motors_vel_des", robot_nv - 6);
+    logger.addIterm("motors_vel_cur", robot_nv - 6);
+    logger.addIterm("FL_est", 3);
+    logger.addIterm("FR_est", 3);
+    logger.addIterm("wbc_FrRes", 12);
+    logger.addIterm("base_pos_des", 3);
+    logger.addIterm("base_pos", 3);
+    logger.addIterm("base_pos_est", 3);
+    logger.addIterm("baseLinVel", 3);
+    logger.addIterm("base_vel_est", 3);
+    logger.addIterm("base_rpy", 3);
+    logger.addIterm("eul_est", 3);
+    logger.addIterm("Ufe", 13);
+    logger.addIterm("legState", 1);
+    logger.addIterm("motionState", 1);
+
+    logger.finishItermAdding();
+
+    //// main loop
+    int MPC_count = 0;
+
+    double openLoopCtrTime = 3;
+    double startSteppingTime = 7;
+    double startWalkingTime = 10;
+    double simEndTime = 200;
+
+    mjtNum simstart = mj_data->time;
+    double simTime = mj_data->time;
+
+    while (!glfwWindowShouldClose(uiController.window))
+    {
+        simstart = mj_data->time;
+        while (mj_data->time - simstart < 1.0 / 60.0 && uiController.runSim)
+        {
+            mj_step(mj_model, mj_data);
+            simTime = mj_data->time;
+            mj_interface.updateSensorValues();
+            mj_interface.dataBusWrite(RobotState);
+
+            if (simTime > 1 && StateModule.flag_init)
+            {
+                std::cout << "init state module" << std::endl;
+                StateModule.init(RobotState);
+            }
+
+            buttonState = uiController.getButtonState();
+            if (simTime > openLoopCtrTime)
+            {
+                if (buttonState.key_space && RobotState.motionState == DataBus::Stand)
+                {
+                    gaitScheduler.start();
+                    jsInterp.setIniPos(RobotState.q(0), RobotState.q(1), RobotState.base_rpy(2));
+                    RobotState.motionState = DataBus::Walk;
+                }
+                else if (buttonState.key_space && RobotState.motionState == DataBus::Walk && fabs(jsInterp.vxLGen.y) < 0.01)
+                {
+                    RobotState.motionState = DataBus::Walk2Stand;
+                    jsInterp.setIniPos(RobotState.q(0), RobotState.q(1), RobotState.base_rpy(2));
+                }
+
+                if (buttonState.key_a && RobotState.motionState != DataBus::Stand)
+                {
+                    if (jsInterp.wzLGen.yDes < 0)
+                        jsInterp.setWzDesLPara(0, 0.5);
+                    else
+                        jsInterp.setWzDesLPara(0.2, 1.0);
+                }
+                if (buttonState.key_d && RobotState.motionState != DataBus::Stand)
+                {
+                    if (jsInterp.wzLGen.yDes > 0)
+                        jsInterp.setWzDesLPara(0, 0.5);
+                    else
+                        jsInterp.setWzDesLPara(-0.2, 1.0);
+                }
+
+                // W: forward at current xv_des
+                if (buttonState.key_w && RobotState.motionState != DataBus::Stand)
+                    jsInterp.setVxDesLPara(xv_des, 2.0);
+
+                // S: backward at current xv_des (negative)
+                if (buttonState.key_s && RobotState.motionState != DataBus::Stand)
+                    jsInterp.setVxDesLPara(-fabs(xv_des), 2.0);
+
+                // J: emergency stop to stand
+                if (buttonState.key_j && RobotState.motionState != DataBus::Stand)
+                {
+                    jsInterp.setVxDesLPara(0, 0.5);
+                    jsInterp.setWzDesLPara(0, 0.5);
+                    if (RobotState.motionState == DataBus::Walk)
+                    {
+                        RobotState.motionState = DataBus::Walk2Stand;
+                        jsInterp.setIniPos(RobotState.q(0), RobotState.q(1), RobotState.base_rpy(2));
+                    }
+                    std::cout << "[Joystick] J: stop and stand" << std::endl;
+                }
+
+                // E: increase speed
+                if (buttonState.key_e)
+                {
+                    xv_des = std::min(std::round((xv_des + xv_step) * 10.0) / 10.0, xv_max);
+                    if (RobotState.motionState != DataBus::Stand && std::fabs(jsInterp.vxLGen.yDes) > 1e-3)
+                    {
+                        const double dir = (jsInterp.vxLGen.yDes >= 0.0) ? 1.0 : -1.0;
+                        jsInterp.setVxDesLPara(dir * xv_des, 0.6);
+                    }
+                    std::cout << "[Speed] xv_des=" << xv_des << " m/s" << std::endl;
+                }
+
+                // Q: decrease speed
+                if (buttonState.key_q)
+                {
+                    xv_des = std::max(std::round((xv_des - xv_step) * 10.0) / 10.0, xv_min);
+                    if (RobotState.motionState != DataBus::Stand && std::fabs(jsInterp.vxLGen.yDes) > 1e-3)
+                    {
+                        const double dir = (jsInterp.vxLGen.yDes >= 0.0) ? 1.0 : -1.0;
+                        jsInterp.setVxDesLPara(dir * xv_des, 0.6);
+                    }
+                    std::cout << "[Speed] xv_des=" << xv_des << " m/s" << std::endl;
+                }
+
+                if (buttonState.key_h)
+                {
+                    jsInterp.setIniPos(RobotState.q(0), RobotState.q(1), RobotState.base_rpy(2));
+                    jsInterp.setWzDesLPara(0, 0.3);
+                    std::cout << "[Joystick] H: reset heading reference" << std::endl;
+                }
+            }
+
+            StateModule.set(RobotState);
+            StateModule.update();
+            StateModule.get(RobotState);
+
+            kinDynSolver.dataBusRead(RobotState);
+            kinDynSolver.computeJ_dJ();
+            kinDynSolver.computeDyn();
+            kinDynSolver.dataBusWrite(RobotState);
+
+            StateModule.setF(RobotState);
+            StateModule.updateF();
+            StateModule.getF(RobotState);
+
+            if (simTime >= openLoopCtrTime && simTime < openLoopCtrTime + 0.002)
+            {
+                RobotState.motionState = DataBus::Stand;
+            }
+
+            if (RobotState.motionState == DataBus::Walk2Stand || simTime <= openLoopCtrTime)
+                jsInterp.setIniPos(RobotState.q(0), RobotState.q(1), RobotState.base_rpy(2));
+
+            if (RobotState.motionState == DataBus::Walk || RobotState.motionState == DataBus::Walk2Stand)
+            {
+                jsInterp.step();
+                RobotState.js_pos_des(2) = stand_legLength + foot_height;
+                jsInterp.dataBusWrite(RobotState);
+
+                MPC_solv.enable();
+
+                gaitScheduler.dataBusRead(RobotState);
+                gaitScheduler.step();
+                gaitScheduler.dataBusWrite(RobotState);
+
+                footPlacement.dataBusRead(RobotState);
+                footPlacement.getSwingPos();
+                footPlacement.dataBusWrite(RobotState);
+            }
+            else{
+                MPC_solv.disable();
+            }
+
+            if (simTime <= openLoopCtrTime || RobotState.motionState == DataBus::Walk2Stand)
+            {
+                WBC_solv.setQini(qIniDes, RobotState.q);
+                WBC_solv.fe_l_pos_des_W = RobotState.fe_l_pos_W;
+                WBC_solv.fe_r_pos_des_W = RobotState.fe_r_pos_W;
+                WBC_solv.fe_l_rot_des_W = RobotState.fe_l_rot_W;
+                WBC_solv.fe_r_rot_des_W = RobotState.fe_r_rot_W;
+                WBC_solv.pCoMDes = RobotState.pCoM_W;
+            }
+
+            // MPC
+            MPC_count = MPC_count + 1;
+            if (MPC_count > (dt_200Hz / dt - 1)) {
+                MPC_solv.dataBusRead(RobotState);
+                MPC_solv.cal();
+                MPC_count = 0;
+            }
+
+            if (RobotState.motionState==DataBus::Walk || RobotState.motionState==DataBus::Walk2Stand) {
+                MPC_solv.dataBusWrite(RobotState);
+            }
+            else {
+                RobotState.Fr_ff = Eigen::VectorXd::Zero(12);
+                RobotState.des_ddq = Eigen::VectorXd::Zero(RobotState.model_nv);
+                RobotState.des_dq = Eigen::VectorXd::Zero(RobotState.model_nv);
+                RobotState.des_delta_q = Eigen::VectorXd::Zero(RobotState.model_nv);
+                RobotState.base_rpy_des << 0.0, 0.0, jsInterp.thetaZ;
+                RobotState.base_pos_des= RobotState.js_pos_des;
+                RobotState.base_pos_des(2) = stand_legLength+foot_height;
+                // ~59 kg robot, ~290 N per foot
+                RobotState.Fr_ff<<0,0,290,0,0,0,
+                        0,0,290,0,0,0;
+            }
+
+            // WBC
+            WBC_solv.dataBusRead(RobotState);
+            WBC_solv.computeDdq(kinDynSolver);
+            WBC_solv.computeTau();
+            WBC_solv.dataBusWrite(RobotState);
+
+            // joint command
+            if (simTime <= openLoopCtrTime)
+            {
+                RobotState.motors_pos_des = eigen2std(resLeg.jointPosRes);
+                RobotState.motors_vel_des = motors_vel_des;
+                RobotState.motors_tor_des = motors_tau_des;
+            }
+            else
+            {
+                Eigen::Matrix<double, 1, nx> L_diag;
+                Eigen::Matrix<double, 1, nu> K_diag;
+                L_diag << 1.0, 1.0, 1.0,
+                        1e-3, 100.0, 1.0,
+                        1e-3, 1e-3, 1e-3,
+                        1, 100.0, 1.0;
+                K_diag << 1.0, 1.0, 1.0,
+                        1.0, 1, 1.0,
+                        1.0, 1.0, 1.0,
+                        1.0, 1, 1.0,
+                        1.0;
+                MPC_solv.set_weight(1e-6, L_diag, K_diag);
+
+                Eigen::VectorXd pos_des = kinDynSolver.integrateDIY(RobotState.q, RobotState.wbc_delta_q_final);
+                RobotState.motors_pos_des = eigen2std(pos_des.block(7, 0, robot_nv - 6, 1));
+                RobotState.motors_vel_des = eigen2std(RobotState.wbc_dq_final);
+                RobotState.motors_tor_des = eigen2std(RobotState.wbc_tauJointRes);
+            }
+
+            // joint PVT controller
+            pvtCtr.dataBusRead(RobotState);
+            if (simTime <= openLoopCtrTime)
+            {
+                pvtCtr.calMotorsPVT(110.0 / 1000.0 / 180.0 * 3.1415);
+            }
+            else
+            {
+                double kp = 1.;
+                double kd = 1.;
+
+                pvtCtr.setJointPD(400 * kp, 15 * kd, "left_hip_roll_joint");
+                pvtCtr.setJointPD(200 * kp, 10 * kd, "left_hip_yaw_joint");
+                pvtCtr.setJointPD(300 * kp, 10 * kd, "left_hip_pitch_joint");
+                pvtCtr.setJointPD(300 * kp, 14 * kd, "left_knee_joint");
+                pvtCtr.setJointPD(300 * kp, 18 * kd, "left_ankle_pitch_joint");
+                pvtCtr.setJointPD(300 * kp, 16 * kd, "left_ankle_roll_joint");
+
+                pvtCtr.setJointPD(400 * kp, 15 * kd, "right_hip_roll_joint");
+                pvtCtr.setJointPD(200 * kp, 10 * kd, "right_hip_yaw_joint");
+                pvtCtr.setJointPD(300 * kp, 10 * kd, "right_hip_pitch_joint");
+                pvtCtr.setJointPD(300 * kp, 14 * kd, "right_knee_joint");
+                pvtCtr.setJointPD(300 * kp, 18 * kd, "right_ankle_pitch_joint");
+                pvtCtr.setJointPD(300 * kp, 16 * kd, "right_ankle_roll_joint");
+                pvtCtr.calMotorsPVT();
+            }
+            pvtCtr.dataBusWrite(RobotState);
+
+            mj_interface.setMotorsTorque(RobotState.motors_tor_out);
+
+            logger.startNewLine();
+            logger.recItermData("dyn_time", simTime);
+            logger.recItermData("motors_pos_cur", RobotState.motors_pos_cur);
+            logger.recItermData("motors_pos_des", RobotState.motors_pos_des);
+            logger.recItermData("motors_tor_cur", RobotState.motors_tor_cur);
+            logger.recItermData("motors_tor_des", RobotState.motors_tor_des);
+            logger.recItermData("motors_tor_out", RobotState.motors_tor_out);
+            logger.recItermData("motors_vel_cur", RobotState.motors_vel_cur);
+            logger.recItermData("motors_vel_des", RobotState.motors_vel_des);
+            logger.recItermData("FL_est", RobotState.FL_est);
+            logger.recItermData("FR_est", RobotState.FR_est);
+            logger.recItermData("wbc_FrRes", RobotState.wbc_FrRes);
+            logger.recItermData("base_pos_des", RobotState.base_pos_des);
+            logger.recItermData("base_pos", RobotState.base_pos);
+            logger.recItermData("base_pos_est", RobotState.base_pos_est);
+            logger.recItermData("baseLinVel", RobotState.baseLinVel);
+            logger.recItermData("base_vel_est", RobotState.base_vel_est);
+            logger.recItermData("base_rpy", RobotState.base_rpy);
+            logger.recItermData("eul_est", RobotState.eul_est);
+            logger.recItermData("Ufe", RobotState.fe_react_tau_cmd);
+            logger.recItermData("legState", RobotState.legState);
+            logger.recItermData("motionState", RobotState.motionState);
+            logger.finishLine();
+        }
+
+        if (mj_data->time >= simEndTime)
+            break;
+
+        uiController.updateScene();
+    };
+    uiController.Close();
+
+    return 0;
+}

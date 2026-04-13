@@ -1,0 +1,6 @@
+Mon Apr 13 13:52:07 2026
+WARNING: mju_openResource: unknown file '../models/scene_v4_leg.xml'
+
+Mon Apr 13 13:52:15 2026
+WARNING: mju_openResource: unknown file '../models/scene_v4_leg.xml'
+
