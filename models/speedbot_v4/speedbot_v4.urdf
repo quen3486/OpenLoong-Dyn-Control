@@ -359,8 +359,8 @@
     </visual>
   </link>
   <joint name="left_shoulder_pitch_joint" type="revolute">
-    <origin xyz="0.0080635 0.098693 0.42818" rpy="0 0 0" />
-    <parent link="base_link" />
+    <origin xyz="0 0.098693 0.07088" rpy="0 0 0" />
+    <parent link="upper_body_link" />
     <child link="left_shoulder_pitch" />
     <axis xyz="0 1 0" />
     <limit lower="-3.09" upper="2.67" effort="60" velocity="4" />
@@ -474,8 +474,8 @@
     </visual>
   </link>
   <joint name="right_shoulder_pitch_joint" type="revolute">
-    <origin xyz="0.0080635 -0.098693 0.42818" rpy="0 0 0" />
-    <parent link="base_link" />
+    <origin xyz="0 -0.098693 0.07088" rpy="0 0 0" />
+    <parent link="upper_body_link" />
     <child link="right_shoulder_pitch" />
     <axis xyz="0 -1 0" />
     <limit lower="-3.09" upper="2.67" effort="60" velocity="4" />

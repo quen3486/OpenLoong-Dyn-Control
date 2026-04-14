@@ -4,3 +4,12 @@ WARNING: mju_openResource: unknown file '../models/scene_v4_leg.xml'
 Mon Apr 13 13:52:15 2026
 WARNING: mju_openResource: unknown file '../models/scene_v4_leg.xml'
 
+Mon Apr 13 18:36:08 2026
+WARNING: mju_openResource: unknown file '../models/scene.xml'
+
+Mon Apr 13 18:38:03 2026
+WARNING: mju_openResource: unknown file '../models/scene.xml'
+
+Mon Apr 13 18:38:07 2026
+WARNING: mju_openResource: unknown file '../models/scene.xml'
+

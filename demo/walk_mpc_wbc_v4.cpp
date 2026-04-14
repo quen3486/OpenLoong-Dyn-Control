@@ -50,13 +50,13 @@ int main(int argc, char **argv)
     UIctr::ButtonState buttonState;
 
     // initialize variables
-    // speedbot_v4: leg length ~0.983m, use 0.95 for slight bend; foot height ~0.053m
-    double stand_legLength = 0.95;
-    double foot_height = 0.053;
-    double xv_des = 0.4;
-    const double xv_step = 0.1;  // speed increment per key press
-    const double xv_max = 1.2;
-    const double xv_min = 0.0;   // speed magnitude lower bound
+    // speedbot_v4: leg length ~0.983m, use 0.95 for slight bend; foot height ~0.053m     
+    double stand_legLength = 0.95;  // desired baselink height
+    double foot_height = 0.053;     // distance between the foot ankel joint and the bottom
+    double xv_des = 0.4;            // desired velocity in x direction
+    const double xv_step = 0.1;     // speed increment per key press
+    const double xv_max = 1.2;      // speed magnitude upper bound
+    const double xv_min = 0.0;      // speed magnitude lower bound
 
     const int robot_nq = kinDynSolver.model_nv + 1;
     const int robot_nv = robot_nq - 1;

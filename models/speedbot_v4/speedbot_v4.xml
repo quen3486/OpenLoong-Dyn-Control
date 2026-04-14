@@ -123,53 +123,54 @@
         <inertial mass="10.4394" pos="0.001283 -7.589E-05 0.20559" fullinertia="0.032326 0.030447 0.033042 -1.5883e-05 -8.8259e-07 -8.047e-07" />
         <geom class="visual" pos="0 0 0" euler="0 0 0" rgba="0.75294 0.75294 0.75294 1" type="mesh" mesh="waist_yaw" />
         <geom class="collision" pos="0 0 0" euler="0 0 0" type="mesh" mesh="waist_yaw" />
-        <body name="upper_body_link" pos="0 0 0.3" />
-      </body>
-      <body name="left_shoulder_pitch" pos="0.0080635 0.098693 0.42818" euler="0 0 0">
-        <joint name="left_shoulder_pitch_joint" axis="0 1 0" range="-3.09 2.67" />
-        <inertial mass="1.4073" pos="0.0091062 0.13568 0.00087007" fullinertia="0.0018568 0.0013884 0.0017462 -5.7776e-05 1.9795e-10 -8.0408e-10" />
-        <geom class="visual" pos="0 0 0" euler="0 0 0" rgba="0.69804 0.69804 0.69804 1" type="mesh" mesh="left_shoulder_pitch" />
-        <body name="left_shoulder_roll" pos="0.0444 0.14081 0.00087012" euler="0 0 0">
-          <joint name="left_shoulder_roll_joint" axis="-1 0 0" range="-1.59 2.25" />
-          <inertial mass="1.0231" pos="-0.044206 0.091886 2.9541E-07" fullinertia="0.001273 0.00072079 0.0013318 0.00014968 -9.7343e-09 1.24e-08" />
-          <geom class="visual" pos="0 0 0" euler="0 0 0" rgba="0.69804 0.69804 0.69804 1" type="mesh" mesh="left_shoulder_roll" />
-          <body name="left_shoulder_yaw" pos="-0.0444 0.103 0">
-            <joint name="left_shoulder_yaw_joint" axis="0 1 0" range="-2.62 2.62" />
-            <inertial mass="1.222" pos="-0.00062283 0.18132 0.008027" fullinertia="0.0025394 0.0010216 0.0025368 -2.4639e-05 -4.375e-06 -0.00011054" />
-            <geom class="visual" pos="0 0 0" euler="0 0 0" rgba="0.75294 0.75294 0.75294 1" type="mesh" mesh="left_shoulder_yaw" />
-            <body name="left_elbow" pos="0 0.197 0.0135" euler="0 0 0">
-              <joint name="left_elbow_joint" axis="0 0 1" range="-2.09 1.05" />
-              <inertial mass="0.73325" pos="-4.9236E-08 0.080341 -0.013515" fullinertia="0.00086196 0.00041879 0.00080645 -8.6493e-10 3.6555e-09 0.00010899" />
-              <geom class="visual" pos="0 0 0" euler="0 0 0" rgba="0.69804 0.69804 0.69804 1" type="mesh" mesh="left_elbow" />
-              <body name="left_wrist_roll" pos="0 0.0896 -0.0135">
-                <joint name="left_wrist_roll_joint" axis="0 1 0" range="-1.97 1.97" />
-                <inertial mass="0.63743" pos="0.0029058 0.16387 -1.135E-05" fullinertia="0.0011202 0.00034519 0.0011544 -5.9547e-05 -3.7396e-08 -7.9913e-08" />
-                <geom class="visual" pos="0 0 0" euler="0 0 0" rgba="0.69804 0.69804 0.69804 1" type="mesh" mesh="left_wrist_roll" />
+        <body name="upper_body_link" pos="0 0 0.3">
+          <body name="left_shoulder_pitch" pos="0 0.098693 0.07088" euler="0 0 0">
+            <joint name="left_shoulder_pitch_joint" axis="0 1 0" range="-3.09 2.67" />
+            <inertial mass="1.4073" pos="0.0091062 0.13568 0.00087007" fullinertia="0.0018568 0.0013884 0.0017462 -5.7776e-05 1.9795e-10 -8.0408e-10" />
+            <geom class="visual" pos="0 0 0" euler="0 0 0" rgba="0.69804 0.69804 0.69804 1" type="mesh" mesh="left_shoulder_pitch" />
+            <body name="left_shoulder_roll" pos="0.0444 0.14081 0.00087012" euler="0 0 0">
+              <joint name="left_shoulder_roll_joint" axis="-1 0 0" range="-1.59 2.25" />
+              <inertial mass="1.0231" pos="-0.044206 0.091886 2.9541E-07" fullinertia="0.001273 0.00072079 0.0013318 0.00014968 -9.7343e-09 1.24e-08" />
+              <geom class="visual" pos="0 0 0" euler="0 0 0" rgba="0.69804 0.69804 0.69804 1" type="mesh" mesh="left_shoulder_roll" />
+              <body name="left_shoulder_yaw" pos="-0.0444 0.103 0">
+                <joint name="left_shoulder_yaw_joint" axis="0 1 0" range="-2.62 2.62" />
+                <inertial mass="1.222" pos="-0.00062283 0.18132 0.008027" fullinertia="0.0025394 0.0010216 0.0025368 -2.4639e-05 -4.375e-06 -0.00011054" />
+                <geom class="visual" pos="0 0 0" euler="0 0 0" rgba="0.75294 0.75294 0.75294 1" type="mesh" mesh="left_shoulder_yaw" />
+                <body name="left_elbow" pos="0 0.197 0.0135" euler="0 0 0">
+                  <joint name="left_elbow_joint" axis="0 0 1" range="-2.09 1.05" />
+                  <inertial mass="0.73325" pos="-4.9236E-08 0.080341 -0.013515" fullinertia="0.00086196 0.00041879 0.00080645 -8.6493e-10 3.6555e-09 0.00010899" />
+                  <geom class="visual" pos="0 0 0" euler="0 0 0" rgba="0.69804 0.69804 0.69804 1" type="mesh" mesh="left_elbow" />
+                  <body name="left_wrist_roll" pos="0 0.0896 -0.0135">
+                    <joint name="left_wrist_roll_joint" axis="0 1 0" range="-1.97 1.97" />
+                    <inertial mass="0.63743" pos="0.0029058 0.16387 -1.135E-05" fullinertia="0.0011202 0.00034519 0.0011544 -5.9547e-05 -3.7396e-08 -7.9913e-08" />
+                    <geom class="visual" pos="0 0 0" euler="0 0 0" rgba="0.69804 0.69804 0.69804 1" type="mesh" mesh="left_wrist_roll" />
+                  </body>
+                </body>
               </body>
             </body>
           </body>
-        </body>
-      </body>
-      <body name="right_shoulder_pitch" pos="0.0080635 -0.098693 0.42818" euler="0 0 0">
-        <joint name="right_shoulder_pitch_joint" axis="0 -1 0" range="-3.09 2.67" />
-        <inertial mass="1.4073" pos="0.0091062 -0.13568 0.00087017" fullinertia="0.0018568 0.0013884 0.0017462 5.7776e-05 -1.9795e-10 -8.0408e-10" />
-        <geom class="visual" pos="0 0 0" euler="0 0 0" rgba="0.69804 0.69804 0.69804 1" type="mesh" mesh="right_shoulder_pitch" />
-        <body name="right_shoulder_roll" pos="0.0444 -0.14081 0.00087012" euler="0 0 0">
-          <joint name="right_shoulder_roll_joint" axis="-1 0 0" range="-2.25 1.59" />
-          <inertial mass="1.0231" pos="-0.044206 -0.091886 -2.9542E-07" fullinertia="0.001273 0.00072079 0.0013318 -0.00014968 9.7343e-09 1.2399e-08" />
-          <geom class="visual" pos="0 0 0" euler="0 0 0" rgba="0.69804 0.69804 0.69804 1" type="mesh" mesh="right_shoulder_roll" />
-          <body name="right_shoulder_yaw" pos="-0.0444 -0.103 0">
-            <joint name="right_shoulder_yaw_joint" axis="0 -1 0" range="-2.62 2.62" />
-            <inertial mass="1.222" pos="-0.00062239 -0.18132 0.0080269" fullinertia="0.0025394 0.0010216 0.0025368 2.4641e-05 -4.3567e-06 0.00011057" />
-            <geom class="visual" pos="0 0 0" euler="0 0 0" rgba="0.69804 0.69804 0.69804 1" type="mesh" mesh="right_shoulder_yaw" />
-            <body name="right_elbow" pos="0 -0.197 0.0135" euler="0 0 0">
-              <joint name="right_elbow_joint" axis="0 0 1" range="-1.05 2.09" />
-              <inertial mass="0.73325" pos="4.9236E-08 -0.080341 -0.013515" fullinertia="0.00086196 0.00041879 0.00080645 -8.6493e-10 -3.6555e-09 -0.00010899" />
-              <geom class="visual" pos="0 0 0" euler="0 0 0" rgba="0.69804 0.69804 0.69804 1" type="mesh" mesh="right_elbow" />
-              <body name="right_wrist_roll" pos="0 -0.1221 -0.0135">
-                <joint name="right_wrist_roll_joint" axis="0 1 0" range="-1.97 1.97" />
-                <inertial mass="0.63743" pos="0.0029058 -0.13137 1.135E-05" fullinertia="0.0011202 0.00034519 0.0011544 5.9547e-05 3.7396e-08 -7.9913e-08" />
-                <geom class="visual" pos="0 0 0" euler="0 0 0" rgba="0.69804 0.69804 0.69804 1" type="mesh" mesh="right_wrist_roll" />
+          <body name="right_shoulder_pitch" pos="0 -0.098693 0.07088" euler="0 0 0">
+            <joint name="right_shoulder_pitch_joint" axis="0 -1 0" range="-3.09 2.67" />
+            <inertial mass="1.4073" pos="0.0091062 -0.13568 0.00087017" fullinertia="0.0018568 0.0013884 0.0017462 5.7776e-05 -1.9795e-10 -8.0408e-10" />
+            <geom class="visual" pos="0 0 0" euler="0 0 0" rgba="0.69804 0.69804 0.69804 1" type="mesh" mesh="right_shoulder_pitch" />
+            <body name="right_shoulder_roll" pos="0.0444 -0.14081 0.00087012" euler="0 0 0">
+              <joint name="right_shoulder_roll_joint" axis="-1 0 0" range="-2.25 1.59" />
+              <inertial mass="1.0231" pos="-0.044206 -0.091886 -2.9542E-07" fullinertia="0.001273 0.00072079 0.0013318 -0.00014968 9.7343e-09 1.2399e-08" />
+              <geom class="visual" pos="0 0 0" euler="0 0 0" rgba="0.69804 0.69804 0.69804 1" type="mesh" mesh="right_shoulder_roll" />
+              <body name="right_shoulder_yaw" pos="-0.0444 -0.103 0">
+                <joint name="right_shoulder_yaw_joint" axis="0 -1 0" range="-2.62 2.62" />
+                <inertial mass="1.222" pos="-0.00062239 -0.18132 0.0080269" fullinertia="0.0025394 0.0010216 0.0025368 2.4641e-05 -4.3567e-06 0.00011057" />
+                <geom class="visual" pos="0 0 0" euler="0 0 0" rgba="0.69804 0.69804 0.69804 1" type="mesh" mesh="right_shoulder_yaw" />
+                <body name="right_elbow" pos="0 -0.197 0.0135" euler="0 0 0">
+                  <joint name="right_elbow_joint" axis="0 0 1" range="-1.05 2.09" />
+                  <inertial mass="0.73325" pos="4.9236E-08 -0.080341 -0.013515" fullinertia="0.00086196 0.00041879 0.00080645 -8.6493e-10 -3.6555e-09 -0.00010899" />
+                  <geom class="visual" pos="0 0 0" euler="0 0 0" rgba="0.69804 0.69804 0.69804 1" type="mesh" mesh="right_elbow" />
+                  <body name="right_wrist_roll" pos="0 -0.1221 -0.0135">
+                    <joint name="right_wrist_roll_joint" axis="0 1 0" range="-1.97 1.97" />
+                    <inertial mass="0.63743" pos="0.0029058 -0.13137 1.135E-05" fullinertia="0.0011202 0.00034519 0.0011544 5.9547e-05 3.7396e-08 -7.9913e-08" />
+                    <geom class="visual" pos="0 0 0" euler="0 0 0" rgba="0.69804 0.69804 0.69804 1" type="mesh" mesh="right_wrist_roll" />
+                  </body>
+                </body>
               </body>
             </body>
           </body>
@@ -191,12 +192,12 @@
     <exclude name="ex_right_knee_right_ankle_pitch" body1="right_knee" body2="right_ankle_pitch" />
     <exclude name="ex_right_ankle_pitch_right_ankle_roll" body1="right_ankle_pitch" body2="right_ankle_roll" />
     <exclude name="ex_base_link_waist_yaw" body1="base_link" body2="waist_yaw" />
-    <exclude name="ex_base_link_left_shoulder_pitch" body1="base_link" body2="left_shoulder_pitch" />
+    <exclude name="ex_upper_body_link_left_shoulder_pitch" body1="upper_body_link" body2="left_shoulder_pitch" />
     <exclude name="ex_left_shoulder_pitch_left_shoulder_roll" body1="left_shoulder_pitch" body2="left_shoulder_roll" />
     <exclude name="ex_left_shoulder_roll_left_shoulder_yaw" body1="left_shoulder_roll" body2="left_shoulder_yaw" />
     <exclude name="ex_left_shoulder_yaw_left_elbow" body1="left_shoulder_yaw" body2="left_elbow" />
     <exclude name="ex_left_elbow_left_wrist_roll" body1="left_elbow" body2="left_wrist_roll" />
-    <exclude name="ex_base_link_right_shoulder_pitch" body1="base_link" body2="right_shoulder_pitch" />
+    <exclude name="ex_upper_body_link_right_shoulder_pitch" body1="upper_body_link" body2="right_shoulder_pitch" />
     <exclude name="ex_right_shoulder_pitch_right_shoulder_roll" body1="right_shoulder_pitch" body2="right_shoulder_roll" />
     <exclude name="ex_right_shoulder_roll_right_shoulder_yaw" body1="right_shoulder_roll" body2="right_shoulder_yaw" />
     <exclude name="ex_right_shoulder_yaw_right_elbow" body1="right_shoulder_yaw" body2="right_elbow" />
