@@ -2,8 +2,8 @@
  * Pin_KinDyn implementation for speedbot_v4 robot.
  * Adapted from pino_kin_dyn.cpp for OpenLoong.
  *
- * Pinocchio joint ordering (alphabetical DFS of URDF tree):
- *   leg_l: 0-5, arm_l: 6-10, leg_r: 11-16, arm_r: 17-21, waist: 22
+ * Pinocchio joint ordering (URDF tree traversal):
+ *   leg_l: 0-5, leg_r: 6-11, waist: 12, arm_l: 13-17, arm_r: 18-22
  *   (fixed-base model uses the same ordering, indices 0-22)
  */
 #include "pino_kin_dyn_v4.h"
@@ -308,7 +308,7 @@ void Pin_KinDyn_V4::computeDyn()
 }
 
 // Inverse kinematics for leg posture
-// Fixed-base joint order: leg_l:0-5, arm_l:6-10, leg_r:11-16, arm_r:17-21, waist:22
+// Fixed-base joint order: leg_l:0-5, leg_r:6-11, waist:12, arm_l:13-17, arm_r:18-22
 Pin_KinDyn_V4::IkRes
 Pin_KinDyn_V4::computeInK_Leg(const Eigen::Matrix3d &Rdes_L, const Eigen::Vector3d &Pdes_L, const Eigen::Matrix3d &Rdes_R,
                               const Eigen::Vector3d &Pdes_R)
@@ -317,9 +317,9 @@ Pin_KinDyn_V4::computeInK_Leg(const Eigen::Matrix3d &Rdes_L, const Eigen::Vector
     const pinocchio::SE3 oMdesR(Rdes_R, Pdes_R);
     Eigen::VectorXd qIk = Eigen::VectorXd::Zero(model_biped_fixed.nv);
     // Initial guess: slight knee bend
-    // left_knee = fixed index 3, right_knee = fixed index 14
+    // left_knee = fixed index 3, right_knee = fixed index 9
     qIk[3] = -0.1;
-    qIk[14] = -0.1;
+    qIk[9] = -0.1;
 
     const double eps = 1e-4;
     const int IT_MAX = 100;
@@ -365,9 +365,9 @@ Pin_KinDyn_V4::computeInK_Leg(const Eigen::Matrix3d &Rdes_L, const Eigen::Vector
         pinocchio::computeJointJacobian(model_biped_fixed, data_biped_fixed, qIk, J_Idx_r, JR);
         Eigen::MatrixXd W;
         W = Eigen::MatrixXd::Identity(model_biped_fixed.nv, model_biped_fixed.nv);
-        // Exclude waist joint (fixed index 22)
-        JL.block(0, 22, 6, 1).setZero();
-        JR.block(0, 22, 6, 1).setZero();
+        // Exclude waist joint (fixed index 12)
+        JL.block(0, 12, 6, 1).setZero();
+        JR.block(0, 12, 6, 1).setZero();
         pinocchio::Data::Matrix6 JlogL;
         pinocchio::Data::Matrix6 JlogR;
         pinocchio::Jlog6(iMdL.inverse(), JlogL);
@@ -405,9 +405,9 @@ Pin_KinDyn_V4::computeInK_Hand(const Eigen::Matrix3d &Rdes_L, const Eigen::Vecto
     const pinocchio::SE3 oMdesR(Rdes_R, Pdes_R);
     Eigen::VectorXd qIk = Eigen::VectorXd::Zero(model_biped_fixed.nv);
     // Initial guess for arm joints (5 DoF per arm)
-    // arm_l: fixed indices 6-10, arm_r: fixed indices 17-21
-    qIk.block<5, 1>(6, 0) << 0.0, -1.0, 0.0, 0.8, 0.0;
-    qIk.block<5, 1>(17, 0) << 0.0, -1.0, 0.0, 0.8, 0.0;
+    // arm_l: fixed indices 13-17, arm_r: fixed indices 18-22
+    qIk.block<5, 1>(13, 0) << 0.0, -1.0, 0.0, 0.8, 0.0;
+    qIk.block<5, 1>(18, 0) << 0.0, -1.0, 0.0, 0.8, 0.0;
 
     const double eps = 1e-4;
     const int IT_MAX = 100;

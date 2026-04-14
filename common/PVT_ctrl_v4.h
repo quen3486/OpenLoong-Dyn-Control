@@ -46,15 +46,15 @@ private:
     std::vector<LPF_Fst> tau_out_lpf;
     std::vector<int> PV_enable;
     double sign(double in);
-    // Pinocchio order: leg_l(6), arm_l(5), leg_r(6), arm_r(5), waist(1) = 23 joints
+    // Pinocchio order: leg_l(6), leg_r(6), waist(1), arm_l(5), arm_r(5) = 23 joints
     const std::vector<std::string> motorName={
         "left_hip_roll_joint","left_hip_yaw_joint","left_hip_pitch_joint",
         "left_knee_joint","left_ankle_pitch_joint","left_ankle_roll_joint",
-        "left_shoulder_pitch_joint","left_shoulder_roll_joint","left_shoulder_yaw_joint",
-        "left_elbow_joint","left_wrist_roll_joint",
         "right_hip_roll_joint","right_hip_yaw_joint","right_hip_pitch_joint",
         "right_knee_joint","right_ankle_pitch_joint","right_ankle_roll_joint",
+        "waist_yaw_joint",
+        "left_shoulder_pitch_joint","left_shoulder_roll_joint","left_shoulder_yaw_joint",
+        "left_elbow_joint","left_wrist_roll_joint",
         "right_shoulder_pitch_joint","right_shoulder_roll_joint","right_shoulder_yaw_joint",
-        "right_elbow_joint","right_wrist_roll_joint",
-        "waist_yaw_joint"};
+        "right_elbow_joint","right_wrist_roll_joint"};
 };

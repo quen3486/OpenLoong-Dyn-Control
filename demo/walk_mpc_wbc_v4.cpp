@@ -95,10 +95,10 @@ int main(int argc, char **argv)
     Eigen::VectorXd qIniDes = Eigen::VectorXd::Zero(mj_model->nq, 1);
     qIniDes.block(7, 0, mj_model->nq - 7, 1) = resLeg.jointPosRes;
     // Overwrite arm joints in q-space:
-    // arm_l: fixed indices 6-10 → q[13..17]
-    // arm_r: fixed indices 17-21 → q[24..28]
-    qIniDes.block(13, 0, 5, 1) = hd_l_des;
-    qIniDes.block(24, 0, 5, 1) = hd_r_des;
+    // arm_l: fixed indices 13-17 → q[20..24]
+    // arm_r: fixed indices 18-22 → q[25..29]
+    qIniDes.block(20, 0, 5, 1) = hd_l_des;
+    qIniDes.block(25, 0, 5, 1) = hd_r_des;
     WBC_solv.setQini(qIniDes, RobotState.q);
 
     // register data logger items
@@ -321,9 +321,9 @@ int main(int argc, char **argv)
             if (simTime <= openLoopCtrTime)
             {
                 Eigen::VectorXd temp = resLeg.jointPosRes;
-                // arm_l at fixed indices 6-10, arm_r at fixed indices 17-21
-                temp.block(6, 0, 5, 1) = hd_l_des;
-                temp.block(17, 0, 5, 1) = hd_r_des;
+                // arm_l at fixed indices 13-17, arm_r at fixed indices 18-22
+                temp.block(13, 0, 5, 1) = hd_l_des;
+                temp.block(18, 0, 5, 1) = hd_r_des;
                 RobotState.motors_pos_des = eigen2std(temp);
                 RobotState.motors_vel_des = motors_vel_des;
                 RobotState.motors_tor_des = motors_tau_des;

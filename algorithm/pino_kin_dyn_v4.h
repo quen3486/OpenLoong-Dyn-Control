@@ -2,10 +2,10 @@
  * Pin_KinDyn for speedbot_v4 robot.
  * Adapted from pino_kin_dyn.h for OpenLoong.
  *
- * Pinocchio joint ordering (alphabetical DFS of URDF tree):
- *   leg_l: 0-5, arm_l: 6-10, leg_r: 11-16, arm_r: 17-21, waist: 22
- *   q:  [base(7), leg_l(6), arm_l(5), leg_r(6), arm_r(5), waist(1)] = 30
- *   dq: [base(6), leg_l(6), arm_l(5), leg_r(6), arm_r(5), waist(1)] = 29
+ * Pinocchio joint ordering (URDF tree traversal):
+ *   leg_l: 0-5, leg_r: 6-11, waist: 12, arm_l: 13-17, arm_r: 18-22
+ *   q:  [base(7), leg_l(6), leg_r(6), waist(1), arm_l(5), arm_r(5)] = 30
+ *   dq: [base(6), leg_l(6), leg_r(6), waist(1), arm_l(5), arm_r(5)] = 29
  */
 #pragma once
 
@@ -28,17 +28,17 @@ class Pin_KinDyn_V4
 {
 public:
     std::vector<bool> motorReachLimit;
-    // Joint names in pinocchio order: leg_l(6), arm_l(5), leg_r(6), arm_r(5), waist(1)
+    // Joint names in pinocchio order: leg_l(6), leg_r(6), waist(1), arm_l(5), arm_r(5)
     const std::vector<std::string> motorName = {
         "left_hip_roll_joint", "left_hip_yaw_joint", "left_hip_pitch_joint",
         "left_knee_joint", "left_ankle_pitch_joint", "left_ankle_roll_joint",
-        "left_shoulder_pitch_joint", "left_shoulder_roll_joint", "left_shoulder_yaw_joint",
-        "left_elbow_joint", "left_wrist_roll_joint",
         "right_hip_roll_joint", "right_hip_yaw_joint", "right_hip_pitch_joint",
         "right_knee_joint", "right_ankle_pitch_joint", "right_ankle_roll_joint",
+        "waist_yaw_joint",
+        "left_shoulder_pitch_joint", "left_shoulder_roll_joint", "left_shoulder_yaw_joint",
+        "left_elbow_joint", "left_wrist_roll_joint",
         "right_shoulder_pitch_joint", "right_shoulder_roll_joint", "right_shoulder_yaw_joint",
-        "right_elbow_joint", "right_wrist_roll_joint",
-        "waist_yaw_joint"};
+        "right_elbow_joint", "right_wrist_roll_joint"};
     Eigen::VectorXd motorMaxTorque;
     Eigen::VectorXd motorMaxPos;
     Eigen::VectorXd motorMinPos;
