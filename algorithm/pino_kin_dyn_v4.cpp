@@ -3,8 +3,8 @@
  * Adapted from pino_kin_dyn.cpp for OpenLoong.
  *
  * Pinocchio joint ordering (URDF tree traversal):
- *   leg_l: 0-5, leg_r: 6-11, waist: 12, arm_l: 13-17, arm_r: 18-22
- *   (fixed-base model uses the same ordering, indices 0-22)
+ *   leg_l: 0-5, leg_r: 6-11, arm_l: 12-16, arm_r: 17-21
+ *   (fixed-base model uses the same ordering, indices 0-21)
  */
 #include "pino_kin_dyn_v4.h"
 #include <utility>
@@ -55,8 +55,6 @@ Pin_KinDyn_V4::Pin_KinDyn_V4(std::string urdf_pathIn)
     r_hip_joint_fixed = model_biped_fixed.getJointId("right_hip_yaw_joint");
     l_hip_joint_fixed = model_biped_fixed.getJointId("left_hip_yaw_joint");
     base_joint = model_biped.getJointId("root_joint");
-    waist_yaw_joint = model_biped.getJointId("waist_yaw_joint");
-
     // read joint pvt parameters
     Json::Reader reader;
     Json::Value root_read;
@@ -308,7 +306,7 @@ void Pin_KinDyn_V4::computeDyn()
 }
 
 // Inverse kinematics for leg posture
-// Fixed-base joint order: leg_l:0-5, leg_r:6-11, waist:12, arm_l:13-17, arm_r:18-22
+// Fixed-base joint order: leg_l:0-5, leg_r:6-11, arm_l:12-16, arm_r:17-21
 Pin_KinDyn_V4::IkRes
 Pin_KinDyn_V4::computeInK_Leg(const Eigen::Matrix3d &Rdes_L, const Eigen::Vector3d &Pdes_L, const Eigen::Matrix3d &Rdes_R,
                               const Eigen::Vector3d &Pdes_R)
@@ -365,9 +363,6 @@ Pin_KinDyn_V4::computeInK_Leg(const Eigen::Matrix3d &Rdes_L, const Eigen::Vector
         pinocchio::computeJointJacobian(model_biped_fixed, data_biped_fixed, qIk, J_Idx_r, JR);
         Eigen::MatrixXd W;
         W = Eigen::MatrixXd::Identity(model_biped_fixed.nv, model_biped_fixed.nv);
-        // Exclude waist joint (fixed index 12)
-        JL.block(0, 12, 6, 1).setZero();
-        JR.block(0, 12, 6, 1).setZero();
         pinocchio::Data::Matrix6 JlogL;
         pinocchio::Data::Matrix6 JlogR;
         pinocchio::Jlog6(iMdL.inverse(), JlogL);
@@ -405,9 +400,9 @@ Pin_KinDyn_V4::computeInK_Hand(const Eigen::Matrix3d &Rdes_L, const Eigen::Vecto
     const pinocchio::SE3 oMdesR(Rdes_R, Pdes_R);
     Eigen::VectorXd qIk = Eigen::VectorXd::Zero(model_biped_fixed.nv);
     // Initial guess for arm joints (5 DoF per arm)
-    // arm_l: fixed indices 13-17, arm_r: fixed indices 18-22
-    qIk.block<5, 1>(13, 0) << 0.0, -1.0, 0.0, 0.8, 0.0;
-    qIk.block<5, 1>(18, 0) << 0.0, -1.0, 0.0, 0.8, 0.0;
+    // arm_l: fixed indices 12-16, arm_r: fixed indices 17-21
+    qIk.block<5, 1>(12, 0) << 0.0, -1.0, 0.0, 0.8, 0.0;
+    qIk.block<5, 1>(17, 0) << 0.0, -1.0, 0.0, 0.8, 0.0;
 
     const double eps = 1e-4;
     const int IT_MAX = 100;

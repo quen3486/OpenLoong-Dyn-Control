@@ -3,9 +3,9 @@
  * Adapted from pino_kin_dyn.h for OpenLoong.
  *
  * Pinocchio joint ordering (URDF tree traversal):
- *   leg_l: 0-5, leg_r: 6-11, waist: 12, arm_l: 13-17, arm_r: 18-22
- *   q:  [base(7), leg_l(6), leg_r(6), waist(1), arm_l(5), arm_r(5)] = 30
- *   dq: [base(6), leg_l(6), leg_r(6), waist(1), arm_l(5), arm_r(5)] = 29
+ *   leg_l: 0-5, leg_r: 6-11, arm_l: 12-16, arm_r: 17-21
+ *   q:  [base(7), leg_l(6), leg_r(6), arm_l(5), arm_r(5)] = 29
+ *   dq: [base(6), leg_l(6), leg_r(6), arm_l(5), arm_r(5)] = 28
  */
 #pragma once
 
@@ -28,13 +28,12 @@ class Pin_KinDyn_V4
 {
 public:
     std::vector<bool> motorReachLimit;
-    // Joint names in pinocchio order: leg_l(6), leg_r(6), waist(1), arm_l(5), arm_r(5)
+    // Joint names in pinocchio order: leg_l(6), leg_r(6), arm_l(5), arm_r(5)
     const std::vector<std::string> motorName = {
         "left_hip_roll_joint", "left_hip_yaw_joint", "left_hip_pitch_joint",
         "left_knee_joint", "left_ankle_pitch_joint", "left_ankle_roll_joint",
         "right_hip_roll_joint", "right_hip_yaw_joint", "right_hip_pitch_joint",
         "right_knee_joint", "right_ankle_pitch_joint", "right_ankle_roll_joint",
-        "waist_yaw_joint",
         "left_shoulder_pitch_joint", "left_shoulder_roll_joint", "left_shoulder_yaw_joint",
         "left_elbow_joint", "left_wrist_roll_joint",
         "right_shoulder_pitch_joint", "right_shoulder_roll_joint", "right_shoulder_yaw_joint",
@@ -48,7 +47,7 @@ public:
     pinocchio::Model model_biped;
     pinocchio::Model model_biped_fixed;
     int model_nv;
-    pinocchio::JointIndex r_ankle_joint, l_ankle_joint, base_joint, r_hip_joint, l_hip_joint, r_hip_roll_joint, l_hip_roll_joint, waist_yaw_joint;
+    pinocchio::JointIndex r_ankle_joint, l_ankle_joint, base_joint, r_hip_joint, l_hip_joint, r_hip_roll_joint, l_hip_roll_joint;
     pinocchio::JointIndex r_ankle_joint_fixed, l_ankle_joint_fixed, r_hip_joint_fixed, l_hip_joint_fixed;
     pinocchio::JointIndex r_hand_joint, l_hand_joint, r_hand_joint_fixed, l_hand_joint_fixed;
     Eigen::VectorXd q, dq, ddq;
