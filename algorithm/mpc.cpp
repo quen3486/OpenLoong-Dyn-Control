@@ -7,12 +7,40 @@ Feel free to use in any purpose, and cite OpenLoong-Dynamics-Control in any styl
 */
 #include "mpc.h"
 #include "useful_math.h"
+#include <algorithm>
+#include <Eigen/Eigenvalues>
+
+namespace
+{
+double clampMin(double v, double lo)
+{
+    return (v < lo) ? lo : v;
+}
+
+bool isValidInertia(const Eigen::Matrix3d &inertiaIn)
+{
+    if (!inertiaIn.allFinite())
+    {
+        return false;
+    }
+    Eigen::SelfAdjointEigenSolver<Eigen::Matrix3d> solver(inertiaIn);
+    if (solver.info() != Eigen::Success)
+    {
+        return false;
+    }
+    return solver.eigenvalues().minCoeff() > 1e-6;
+}
+}
 
 MPC::MPC(double dtIn) : QP(nu * ch, nc * ch)
 {
-    m = 77.35;
+    // Runtime values are expected to be configured by demo (gait profile) or DataBus.
+    m = 1.0;
     g = -9.8;
-    miu = 0.5;
+    miu = 0.7;
+    fzMaxScale = 3.0;
+    useDataBusInertia = true;
+    Ic.setIdentity();
     delta_foot[0] = 0.073;
     delta_foot[1] = 0.125;
     delta_foot[2] = 0.025;
@@ -20,7 +48,7 @@ MPC::MPC(double dtIn) : QP(nu * ch, nc * ch)
 
     max[0] = 1000.0;
     max[1] = 1000.0;
-    max[2] = -3.0 * m * g;
+    max[2] = -fzMaxScale * m * g;
     max[3] = 20.0;
     max[4] = 80.0;
     max[5] = 100.0;
@@ -82,6 +110,71 @@ MPC::MPC(double dtIn) : QP(nu * ch, nc * ch)
     QP.setOptions(option);
 
     dt = dtIn;
+}
+
+void MPC::setRobotMass(double massIn)
+{
+    m = clampMin(massIn, 1.0);
+    max[2] = -fzMaxScale * m * g;
+}
+
+void MPC::setFrictionCoeff(double muIn)
+{
+    miu = std::clamp(muIn, 0.01, 2.0);
+}
+
+bool MPC::setBodyInertia(const Eigen::Matrix3d &inertiaIn)
+{
+    Eigen::Matrix3d inertiaSym = 0.5 * (inertiaIn + inertiaIn.transpose());
+    if (!isValidInertia(inertiaSym))
+    {
+        return false;
+    }
+    Ic = inertiaSym;
+    return true;
+}
+
+void MPC::setUseDataBusInertia(bool enable)
+{
+    useDataBusInertia = enable;
+}
+
+void MPC::setFootSupportPolygon(double xFrontIn, double xRearIn, double yLeftIn, double yRightIn)
+{
+    delta_foot[0] = clampMin(xFrontIn, 1e-4);
+    delta_foot[1] = clampMin(xRearIn, 1e-4);
+    delta_foot[2] = clampMin(yLeftIn, 1e-4);
+    delta_foot[3] = clampMin(yRightIn, 1e-4);
+}
+
+void MPC::setWrenchLimits(double forceXYMaxIn, double fzMaxScaleIn,
+                          double torqueXMaxIn, double torqueYMaxIn, double torqueZMaxIn)
+{
+    const double forceXYMax = clampMin(forceXYMaxIn, 1.0);
+    const double torqueXMax = clampMin(torqueXMaxIn, 0.1);
+    const double torqueYMax = clampMin(torqueYMaxIn, 0.1);
+    const double torqueZMax = clampMin(torqueZMaxIn, 0.1);
+
+    fzMaxScale = clampMin(fzMaxScaleIn, 0.1);
+
+    max[0] = forceXYMax;
+    max[1] = forceXYMax;
+    max[2] = -fzMaxScale * m * g;
+    max[3] = torqueXMax;
+    max[4] = torqueYMax;
+    max[5] = torqueZMax;
+
+    min[0] = -forceXYMax;
+    min[1] = -forceXYMax;
+    min[2] = 0.0;
+    min[3] = -torqueXMax;
+    min[4] = -torqueYMax;
+    min[5] = -torqueZMax;
+}
+
+double MPC::getRobotMass() const
+{
+    return m;
 }
 
 void MPC::set_weight(double u_weight, Eigen::MatrixXd L_diag, Eigen::MatrixXd K_diag)
@@ -187,15 +280,22 @@ void MPC::dataBusRead(DataBus &Data)
     pf2comd.block<3, 1>(0, 0) = pe.block<3, 1>(0, 0) - Xd.block<3, 1>(3, 0);
     pf2comd.block<3, 1>(3, 0) = pe.block<3, 1>(3, 0) - Xd.block<3, 1>(3, 0);
 
-    // Ic = Data.inertia;
-    Ic << 12.61, 0, 0.37, 0, 11.15, 0.01, 0.37, 0.01, 2.15;
+    if (useDataBusInertia)
+    {
+        Eigen::Matrix3d inertiaSym = 0.5 * (Data.inertia + Data.inertia.transpose());
+        if (isValidInertia(inertiaSym))
+        {
+            Ic = inertiaSym;
+        }
+    }
 
     legStateCur = Data.legState;
     legStateNext = Data.legStateNext;
+    const double tSwingRef = std::max(0.05, Data.tSwing);
     for (int i = 0; i < mpc_N; i++)
     {
         double aa;
-        aa = i * dt / 0.4;
+        aa = i * dt / tSwingRef;
         double phip;
         phip = Data.phi + aa;
         if (phip > 1)

@@ -19,6 +19,9 @@ public:
     double tSwing{0.4};
     double dt{0.001};
     double FzThrehold{100};
+    double phiSwitchMin{0.6};
+    double fzSwitchThreshold{280.0};
+    double fzStopThreshold{200.0};
     double Fz_L_m{0}, Fz_R_m{0};
     DataBus::LegState firstleg, legState, legStateNext;
     DataBus::MotionState motionState;
@@ -43,6 +46,5 @@ private:
     int model_nv;
 
 };
-
 
 

@@ -130,7 +130,7 @@ void GaitScheduler::step()
         }
     }
 
-    if (legState == DataBus::LSt && FRest[2] >= 280 && phi >= 0.6)
+    if (legState == DataBus::LSt && FRest[2] >= fzSwitchThreshold && phi >= phiSwitchMin)
     // if (legState == DataBus::LSt && ((FRest[2] >= 280 && phi >= 0.6) || (phi >=0.99)))
     // if (legState == DataBus::LSt && phi >= 0.9)
     {
@@ -144,7 +144,7 @@ void GaitScheduler::step()
             stepNumCur++;
         }
     }
-    else if (legState == DataBus::RSt && FLest[2] >= 280 && phi >= 0.6)
+    else if (legState == DataBus::RSt && FLest[2] >= fzSwitchThreshold && phi >= phiSwitchMin)
     // else if (legState == DataBus::RSt && ((FLest[2] >= 280 && phi >= 0.6) || (phi >=0.99)))
     // else if (legState == DataBus::RSt && phi >= 0.9)
     {
@@ -161,13 +161,13 @@ void GaitScheduler::step()
 
     if (!enableNextStep)
     {
-        if (legState == DataBus::LSt && FRest[2] >= 200)
+        if (legState == DataBus::LSt && FRest[2] >= fzStopThreshold)
         {
             touchDown = true;
             stepNumCur++;
 			legState = DataBus::DSt;
         }
-        if (legState == DataBus::RSt && FLest[2] >= 200)
+        if (legState == DataBus::RSt && FLest[2] >= fzStopThreshold)
         {
             touchDown = true;
             stepNumCur++;
@@ -213,7 +213,6 @@ void GaitScheduler::step()
 void GaitScheduler::start(){
 	start_walk = true;
 }
-
 
 
 

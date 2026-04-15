@@ -17,6 +17,14 @@ public:
     double kp_vx{0}, kp_vy{0}, kp_wz{0};
     double legLength{1};
     double stepHeight{0.1};
+    double xOffsetL{-0.07};
+    double yOffsetL{0.04};
+    double zOffsetW{-0.035};
+    double swingTrajectoryPhase{0.2};
+    double swingTrajectoryWindow{1.4};
+    double zStretchStartPhi{0.98};
+    double zStretchStep{-0.002};
+    double zStretchMin{-0.05};
     double phi{0};      // phase varialbe for trajectory generation, must between 0 and 1
     double tSwing{0.4}; // swing time
     Eigen::Vector3d posStart_W, posDes_W, hipPos_W, STPos_W;

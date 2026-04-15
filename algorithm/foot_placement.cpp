@@ -7,6 +7,7 @@ Feel free to use in any purpose, and cite OpenLoong-Dynamics-Control in any styl
 */
 #include "foot_placement.h"
 #include "bezier_1D.h"
+#include <algorithm>
 
 void FootPlacement::dataBusRead(DataBus &robotState)
 {
@@ -60,12 +61,11 @@ void FootPlacement::getSwingPos()
     posDes_W(0) += 0.5 * hip_width * (cos(thetaF) - cos(yawCur + theta0));
     posDes_W(1) += 0.5 * hip_width * (sin(thetaF) - sin(yawCur + theta0));
 
-    double xOff_L = -0.07;  //-0.01; // foot-end position offset in x direction in body frame
-    double yOff_L = 0.04;   // 0.01; // foot-end position offset in y direction in body frame, positive for moving the leg inside
-    double zOff_W = -0.035; // foot-end position offset in z direction in world frame
+    const double xOff_L = xOffsetL; // foot-end position offset in x direction in body frame
+    const double yOff_L = yOffsetL; // foot-end position offset in y direction in body frame, positive for moving the leg inside
 
     //    posDes_W(2)=STPos_W(2)-0.04;
-    posDes_W(2) = base_pos(2) - legLength + zOff_W;
+    posDes_W(2) = base_pos(2) - legLength + zOffsetW;
 
     double xOff_W(0), yOff_W(0);
     if (legState == DataBus::LSt)
@@ -97,17 +97,17 @@ void FootPlacement::getSwingPos()
         pDesCur[1] = posStart_W(1) + (posDes_W(1) - posStart_W(1)) / (2 * 3.1415) * (2 * 3.1415 * phi - sin(2 * 3.1415 * phi));
     }
 
-    if (phi >= 0.98)
+    if (phi >= zStretchStartPhi)
     {
-        zStretch += -0.002;
+        zStretch += zStretchStep;
 
         // std::cout << "---------------- " << zStretch << std::endl;
     }
     else
         zStretch = 0;
-    if (zStretch < -0.05)
+    if (zStretchStep <= 0.0 && zStretch < zStretchMin)
     {
-        zStretch = -0.05;
+        zStretch = zStretchMin;
         // finish_Stretch = true;
     }
 
@@ -117,7 +117,7 @@ void FootPlacement::getSwingPos()
     // }
 
     // pDesCur[2] = posStart_W(2) + stepHeight * 0.5 * (1 - cos(2 * 3.1415 * phi)) + (posDes_W(2) - posStart_W(2)) / (2 * 3.1415) * (2 * 3.1415 * phi - sin(2 * 3.1415 * phi))+ zStretch;
-    pDesCur[2] = posStart_W(2) + Trajectory(0.2, stepHeight, posDes_W(2) - posStart_W(2)) + zStretch;
+    pDesCur[2] = posStart_W(2) + Trajectory(swingTrajectoryPhase, stepHeight, posDes_W(2) - posStart_W(2)) + zStretch;
 }
 
 double FootPlacement::Trajectory(double phase, double hei, double len)
@@ -140,7 +140,13 @@ double FootPlacement::Trajectory(double phase, double hei, double len)
     }
     else
     {
-        double s = Bswpid.getOut((1.4 - phi) / (1.4 - phase));
+        const double denom = std::max(1e-6, swingTrajectoryWindow - phase);
+        double ratio = (swingTrajectoryWindow - phi) / denom;
+        if (ratio < 0.0)
+            ratio = 0.0;
+        if (ratio > 1.0)
+            ratio = 1.0;
+        double s = Bswpid.getOut(ratio);
         if (s > 0)
         {
             output = hei * s + len * (1.0 - s);

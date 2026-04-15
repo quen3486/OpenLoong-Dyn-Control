@@ -37,6 +37,14 @@ public:
     void    cal();
     void    dataBusRead(DataBus &Data);
     void    dataBusWrite(DataBus &Data);
+    void    setRobotMass(double massIn);
+    void    setFrictionCoeff(double muIn);
+    bool    setBodyInertia(const Eigen::Matrix3d &inertiaIn);
+    void    setUseDataBusInertia(bool enable);
+    void    setFootSupportPolygon(double xFrontIn, double xRearIn, double yLeftIn, double yRightIn);
+    void    setWrenchLimits(double forceXYMaxIn, double fzMaxScaleIn,
+                            double torqueXMaxIn, double torqueYMaxIn, double torqueZMaxIn);
+    double  getRobotMass() const;
 
     void    enable();
     void    disable();
@@ -79,6 +87,8 @@ private:
     double      max[6], min[6];
 
     double m, g, miu, delta_foot[4];
+    double fzMaxScale;
+    bool useDataBusInertia;
     Eigen::Matrix<double,3,1>   pCoM;
     Eigen::Matrix<double,6,1>   pf2com, pf2comd, pe;
     Eigen::Matrix<double,6,1>   pf2comi[mpc_N];
@@ -108,4 +118,3 @@ private:
 	double			qp_cpuTime;
     int 			qp_Status, qp_nWSR;
 };
-

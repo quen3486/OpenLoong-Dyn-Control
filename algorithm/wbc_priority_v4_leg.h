@@ -20,8 +20,18 @@ public:
     DataBus::MotionState motionStateCur;
 
     WBC_priority_V4_Leg(int model_nv_In, int QP_nvIn, int QP_ncIn, double miu_In, double dt);
+    void setContactMiu(double miuIn);
 
     double miu{0.5};
+    double cfg_pos_err_clamp_xy{0.02};
+    double cfg_pos_err_clamp_z{0.005};
+    double cfg_posrot_kp{500.0};
+    double cfg_posrot_kd{10.0};
+    double cfg_posrot_kp_x{100.0};
+    double cfg_posrot_kp_pitch{800.0};
+    double cfg_posrot_kd_pitch{10.0};
+    double cfg_swing_kp{500.0};
+    double cfg_swing_kd{20.0};
     Eigen::MatrixXd dyn_M, dyn_M_inv, dyn_Ag, dyn_dAg;
     Eigen::VectorXd dyn_Non;
     Eigen::MatrixXd Jc, dJc, Jfe, dJfe;

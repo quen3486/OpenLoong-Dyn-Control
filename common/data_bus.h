@@ -17,13 +17,13 @@ struct DataBus
     const Eigen::Matrix3d fe_R_rot_L_off = (Eigen::MatrixXd(3, 3) << 1, 0, 0, 0, 1, 0, 0, 0, 1).finished();
 
     // motors, sensors and states feedback
-    double rpy[3];
-    double fL[3];
-    double fR[3];
-    double basePos[3];
-    double baseLinVel[3]; // velocity of the basePos
-    double baseAcc[3];    // baseAcc of the base link
-    double baseAngVel[3]; // angular velocity of the base link
+    double rpy[3]{0.0, 0.0, 0.0};
+    double fL[3]{0.0, 0.0, 0.0};
+    double fR[3]{0.0, 0.0, 0.0};
+    double basePos[3]{0.0, 0.0, 0.0};
+    double baseLinVel[3]{0.0, 0.0, 0.0}; // velocity of the basePos
+    double baseAcc[3]{0.0, 0.0, 0.0};    // baseAcc of the base link
+    double baseAngVel[3]{0.0, 0.0, 0.0}; // angular velocity of the base link
     std::vector<double> motors_pos_cur;
     std::vector<double> motors_vel_cur;
     std::vector<double> motors_tor_cur;
@@ -176,18 +176,49 @@ struct DataBus
         X_cal = Eigen::VectorXd::Zero(12);
         dX_cal = Eigen::VectorXd::Zero(12);
         fe_react_tau_cmd = Eigen::VectorXd::Zero(13 * 3);
+        qp_nWSR_MPC = 0;
+        qp_cpuTime_MPC = 0.0;
+        qpStatus_MPC = 0;
         Fr_ff = Eigen::VectorXd::Zero(12);
         des_ddq = Eigen::VectorXd::Zero(model_nv);
         des_dq = Eigen::VectorXd::Zero(model_nv);
         des_delta_q = Eigen::VectorXd::Zero(model_nv);
+        qp_nWSR = 0;
+        qp_cpuTime = 0.0;
+        qp_status = 0;
         base_rpy_des.setZero();
         base_pos_des.setZero();
         js_eul_des.setZero();
         js_pos_des.setZero();
         js_omega_des.setZero();
         js_vel_des.setZero();
+        swingStartPos_W.setZero();
+        swingDesPosCur_W.setZero();
+        swingDesPosCur_L.setZero();
+        swingDesPosFinal_W.setZero();
+        stanceDesPos_W.setZero();
+        posHip_W.setZero();
+        posST_W.setZero();
+        desV_W.setZero();
+        desWz_W = 0.0;
+        theta0 = 0.0;
+        width_hips = 0.0;
+        tSwing = 0.4;
+        phi = 0.0;
         motionState = Stand;
+        base_pos << 0, 0, 0;
         base_vel << 0, 0, 0;
+        base_rpy << 0, 0, 0;
+        base_omega_W << 0, 0, 0;
+        base_rot.setIdentity();
+        base_pos_est.setZero();
+        base_vel_est.setZero();
+        eul_est.setZero();
+        omegaW_est.setZero();
+        fe_l_pos_W_est.setZero();
+        fe_r_pos_W_est.setZero();
+        delta_acc.setZero();
+        freeAcc.setZero();
     };
 
     // update q according to sensor values, must update sensor values before

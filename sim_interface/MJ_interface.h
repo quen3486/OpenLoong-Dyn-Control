@@ -39,6 +39,8 @@ public:
     const std::string velSensorName="baselink-velocity";
     const std::string gyroSensorName="baselink-gyro";
     const std::string accSensorName="baselink-baseAcc";
+    const std::string touchSensorLName="lf-touch";
+    const std::string touchSensorRName="rf-touch";
 
     MJ_Interface(mjModel *mj_modelIn, mjData  *mj_dataIn);
     void updateSensorValues();
@@ -54,11 +56,12 @@ private:
     int velSensorId;
     int gyroSensorId;
     int accSensorId;
+    int touchSensorLId;
+    int touchSensorRId;
     int baseBodyId;
 
     double timeStep{0.001}; // second
     bool isIni{false};
 };
-
 
 

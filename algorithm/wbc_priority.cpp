@@ -11,6 +11,7 @@ Feel free to use in any purpose, and cite OpenLoong-Dynamics-Control in any styl
 
 #include "wbc_priority.h"
 #include "iostream"
+#include <algorithm>
 
 // QP_nvIn=18, QP_ncIn=22
 WBC_priority::WBC_priority(int model_nv_In, int QP_nvIn, int QP_ncIn, double miu_In, double dt) : QP_prob(QP_nvIn,
@@ -97,6 +98,11 @@ WBC_priority::WBC_priority(int model_nv_In, int QP_nvIn, int QP_ncIn, double miu
     taskOrder_stand.emplace_back("HeadRP");
 
     kin_tasks_stand.buildPriority(taskOrder_stand);
+}
+
+void WBC_priority::setContactMiu(double miuIn)
+{
+    miu = std::clamp(miuIn, 0.01, 2.0);
 }
 
 void WBC_priority::dataBusRead(const DataBus &robotState)
@@ -473,12 +479,12 @@ void WBC_priority::computeDdq(Pin_KinDyn &pinKinDynIn)
         id = kin_tasks_walk.getId("PosRot");
         kin_tasks_walk.taskLib[id].errX = Eigen::VectorXd::Zero(6);
         kin_tasks_walk.taskLib[id].errX.block(0, 0, 3, 1) = base_pos_des - q.block(0, 0, 3, 1);
-        if (fabs(kin_tasks_walk.taskLib[id].errX(0)) >= 0.02)
-            kin_tasks_walk.taskLib[id].errX(0) = 0.02 * sign(kin_tasks_walk.taskLib[id].errX(0));
-        if (fabs(kin_tasks_walk.taskLib[id].errX(1)) >= 0.02)
-            kin_tasks_walk.taskLib[id].errX(1) = 0.02 * sign(kin_tasks_walk.taskLib[id].errX(1));
-        if (kin_tasks_walk.taskLib[id].errX(2)>0.005){
-            kin_tasks_walk.taskLib[id].errX(2) = 0.005;
+        if (fabs(kin_tasks_walk.taskLib[id].errX(0)) >= cfg_pos_err_clamp_xy)
+            kin_tasks_walk.taskLib[id].errX(0) = cfg_pos_err_clamp_xy * sign(kin_tasks_walk.taskLib[id].errX(0));
+        if (fabs(kin_tasks_walk.taskLib[id].errX(1)) >= cfg_pos_err_clamp_xy)
+            kin_tasks_walk.taskLib[id].errX(1) = cfg_pos_err_clamp_xy * sign(kin_tasks_walk.taskLib[id].errX(1));
+        if (kin_tasks_walk.taskLib[id].errX(2)>cfg_pos_err_clamp_z){
+            kin_tasks_walk.taskLib[id].errX(2) = cfg_pos_err_clamp_z;
         }
         desRot = eul2Rot(base_rpy_des(0), base_rpy_des(1), base_rpy_des(2));
         kin_tasks_walk.taskLib[id].errX.block<3, 1>(3, 0) = diffRot(base_rot, desRot);
@@ -487,13 +493,13 @@ void WBC_priority::computeDdq(Pin_KinDyn &pinKinDynIn)
         // kin_tasks_walk.taskLib[id].derrX = des_dq.block(0, 0, 6, 1) - dq.block(0, 0, 6, 1);
         kin_tasks_walk.taskLib[id].ddxDes = Eigen::VectorXd::Zero(6);
         kin_tasks_walk.taskLib[id].dxDes = Eigen::VectorXd::Zero(6);
-        kin_tasks_walk.taskLib[id].kp = Eigen::MatrixXd::Identity(6, 6) * 500;
-        kin_tasks_walk.taskLib[id].kp.block(3, 3, 3, 3) = Eigen::MatrixXd::Identity(3, 3) * 500;
-        kin_tasks_walk.taskLib[id].kp(0,0) = 100;
-        kin_tasks_walk.taskLib[id].kp(4,4) = 800;
+        kin_tasks_walk.taskLib[id].kp = Eigen::MatrixXd::Identity(6, 6) * cfg_posrot_kp;
+        kin_tasks_walk.taskLib[id].kp.block(3, 3, 3, 3) = Eigen::MatrixXd::Identity(3, 3) * cfg_posrot_kp;
+        kin_tasks_walk.taskLib[id].kp(0,0) = cfg_posrot_kp_x;
+        kin_tasks_walk.taskLib[id].kp(4,4) = cfg_posrot_kp_pitch;
         // kin_tasks_walk.taskLib[id].kp(3,3) = 800;
-        kin_tasks_walk.taskLib[id].kd = Eigen::MatrixXd::Identity(6, 6) * 10;
-        kin_tasks_walk.taskLib[id].kd(4,4) = 10;
+        kin_tasks_walk.taskLib[id].kd = Eigen::MatrixXd::Identity(6, 6) * cfg_posrot_kd;
+        kin_tasks_walk.taskLib[id].kd(4,4) = cfg_posrot_kd_pitch;
         kin_tasks_walk.taskLib[id].J = J_base;
         kin_tasks_walk.taskLib[id].dJ = dJ_base;
         kin_tasks_walk.taskLib[id].W.diagonal() = Eigen::VectorXd::Ones(model_nv);
@@ -508,8 +514,8 @@ void WBC_priority::computeDdq(Pin_KinDyn &pinKinDynIn)
         //        kin_tasks_walk.taskLib[id].derrX=-Jsw*dq;
         kin_tasks_walk.taskLib[id].ddxDes = Eigen::VectorXd::Zero(6);
         kin_tasks_walk.taskLib[id].dxDes = Eigen::VectorXd::Zero(6);
-        kin_tasks_walk.taskLib[id].kp = Eigen::MatrixXd::Identity(6, 6) * 500;
-        kin_tasks_walk.taskLib[id].kd = Eigen::MatrixXd::Identity(6, 6) * 20;
+        kin_tasks_walk.taskLib[id].kp = Eigen::MatrixXd::Identity(6, 6) * cfg_swing_kp;
+        kin_tasks_walk.taskLib[id].kd = Eigen::MatrixXd::Identity(6, 6) * cfg_swing_kd;
         kin_tasks_walk.taskLib[id].J = Jsw;
         kin_tasks_walk.taskLib[id].J.block(0, 22, 6, 3).setZero(); // exculde waist joints
         kin_tasks_walk.taskLib[id].dJ = dJsw;

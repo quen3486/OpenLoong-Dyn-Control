@@ -48,6 +48,8 @@ MJ_Interface::MJ_Interface(mjModel *mj_modelIn, mjData *mj_dataIn)
     velSensorId = mj_name2id(mj_model, mjOBJ_SENSOR, velSensorName.c_str());
     gyroSensorId = mj_name2id(mj_model, mjOBJ_SENSOR, gyroSensorName.c_str());
     accSensorId = mj_name2id(mj_model, mjOBJ_SENSOR, accSensorName.c_str());
+    touchSensorLId = mj_name2id(mj_model, mjOBJ_SENSOR, touchSensorLName.c_str());
+    touchSensorRId = mj_name2id(mj_model, mjOBJ_SENSOR, touchSensorRName.c_str());
 }
 
 void MJ_Interface::updateSensorValues()
@@ -87,6 +89,15 @@ void MJ_Interface::updateSensorValues()
         baseAngVel[i] = mj_data->sensordata[mj_model->sensor_adr[gyroSensorId] + i];
         baseLinVel[i] = (basePos[i] - posOld) / (mj_model->opt.timestep);
     }
+
+    const double touchL = (touchSensorLId >= 0) ? mj_data->sensordata[mj_model->sensor_adr[touchSensorLId]] : 0.0;
+    const double touchR = (touchSensorRId >= 0) ? mj_data->sensordata[mj_model->sensor_adr[touchSensorRId]] : 0.0;
+    f3d[0][0] = 0.0;
+    f3d[1][0] = 0.0;
+    f3d[2][0] = touchL;
+    f3d[0][1] = 0.0;
+    f3d[1][1] = 0.0;
+    f3d[2][1] = touchR;
 }
 
 void MJ_Interface::setMotorsTorque(std::vector<double> &tauIn)
@@ -108,12 +119,12 @@ void MJ_Interface::dataBusWrite(DataBus &busIn)
     busIn.fR[0] = f3d[0][1];
     busIn.fR[1] = f3d[1][1];
     busIn.fR[2] = f3d[2][1];
-    // busIn.basePos[0] = basePos[0];
-    // busIn.basePos[1] = basePos[1];
-    // busIn.basePos[2] = basePos[2];
-    // busIn.baseLinVel[0] = baseLinVel[0];
-    // busIn.baseLinVel[1] = baseLinVel[1];
-    // busIn.baseLinVel[2] = baseLinVel[2];
+    busIn.basePos[0] = basePos[0];
+    busIn.basePos[1] = basePos[1];
+    busIn.basePos[2] = basePos[2];
+    busIn.baseLinVel[0] = baseLinVel[0];
+    busIn.baseLinVel[1] = baseLinVel[1];
+    busIn.baseLinVel[2] = baseLinVel[2];
     busIn.baseAcc[0] = baseAcc[0];
     busIn.baseAcc[1] = baseAcc[1];
     busIn.baseAcc[2] = baseAcc[2];

@@ -15,10 +15,12 @@
 #include "gait_scheduler.h"
 #include "foot_placement.h"
 #include "joystick_interpreter.h"
+#include "gait_profile.h"
 #include <string>
 #include <iostream>
 #include <algorithm>
 #include <cmath>
+#include <cstdlib>
 #include "StateEst.h"
 
 const double dt = 0.001;
@@ -43,6 +45,34 @@ int main(int argc, char **argv)
     DataLogger logger("../record/datalog.log");
     StateEst StateModule(0.001);
 
+    GaitProfile gaitProfile;
+    gaitProfile.forwardSpeedDefault = 0.4;
+    gaitProfile.speedStep = 0.1;
+    gaitProfile.speedMax = 1.2;
+    gaitProfile.speedMin = 0.0;
+    gaitProfile.turnRateCmd = 0.2;
+    std::string gaitProfileErr;
+    if (!loadGaitProfile("../common/gait_profile_v4.json", gaitProfile, &gaitProfileErr))
+    {
+        std::cerr << "[GaitProfile] fallback to built-in defaults: " << gaitProfileErr << std::endl;
+    }
+    Eigen::Matrix3d mpcInertiaCfg;
+    mpcInertiaCfg << gaitProfile.mpcInertiaXx, gaitProfile.mpcInertiaXy, gaitProfile.mpcInertiaXz,
+                     gaitProfile.mpcInertiaXy, gaitProfile.mpcInertiaYy, gaitProfile.mpcInertiaYz,
+                     gaitProfile.mpcInertiaXz, gaitProfile.mpcInertiaYz, gaitProfile.mpcInertiaZz;
+    MPC_solv.setRobotMass(gaitProfile.mpcMass);
+    MPC_solv.setFrictionCoeff(gaitProfile.contactMiu);
+    if (!MPC_solv.setBodyInertia(mpcInertiaCfg))
+    {
+        std::cerr << "[MPC] invalid inertia config, keeping previous inertia matrix." << std::endl;
+    }
+    MPC_solv.setUseDataBusInertia(gaitProfile.mpcUseDataBusInertia);
+    MPC_solv.setFootSupportPolygon(gaitProfile.mpcDeltaFootFront, gaitProfile.mpcDeltaFootRear,
+                                   gaitProfile.mpcDeltaFootLeft, gaitProfile.mpcDeltaFootRight);
+    MPC_solv.setWrenchLimits(gaitProfile.mpcForceMaxXY, gaitProfile.mpcFzMaxScale,
+                             gaitProfile.mpcTorqueMaxX, gaitProfile.mpcTorqueMaxY, gaitProfile.mpcTorqueMaxZ);
+    WBC_solv.setContactMiu(gaitProfile.contactMiu);
+
     // initialize UI: GLFW
     uiController.iniGLFW();
     uiController.enableTracking();
@@ -53,20 +83,44 @@ int main(int argc, char **argv)
     // speedbot_v4: leg length ~0.983m, use 0.95 for slight bend; foot height ~0.053m     
     double stand_legLength = 0.95;  // desired baselink height
     double foot_height = 0.053;     // distance between the foot ankel joint and the bottom
-    double xv_des = 0.4;            // desired velocity in x direction
-    const double xv_step = 0.1;     // speed increment per key press
-    const double xv_max = 1.2;      // speed magnitude upper bound
-    const double xv_min = 0.0;      // speed magnitude lower bound
+    double xv_des = gaitProfile.forwardSpeedDefault; // desired velocity in x direction
+    double xv_step = gaitProfile.speedStep;          // speed increment per key press
+    double xv_max = gaitProfile.speedMax;            // speed magnitude upper bound
+    double xv_min = gaitProfile.speedMin;            // speed magnitude lower bound
+    const double turnRateCmd = gaitProfile.turnRateCmd;
+
+    gaitScheduler.tSwing = gaitProfile.tSwing;
+    gaitScheduler.phiSwitchMin = gaitProfile.phiSwitchMin;
+    gaitScheduler.fzSwitchThreshold = gaitProfile.fzSwitchThreshold;
+    gaitScheduler.fzStopThreshold = gaitProfile.fzStopThreshold;
 
     const int robot_nq = kinDynSolver.model_nv + 1;
     const int robot_nv = robot_nq - 1;
 
     RobotState.width_hips = 0.245;
-    footPlacement.kp_vx = 0.03;
-    footPlacement.kp_vy = 0.03;
-    footPlacement.kp_wz = 0.03;
-    footPlacement.stepHeight = 0.12;
+    footPlacement.kp_vx = gaitProfile.kpVx;
+    footPlacement.kp_vy = gaitProfile.kpVy;
+    footPlacement.kp_wz = gaitProfile.kpWz;
+    footPlacement.stepHeight = gaitProfile.stepHeight;
     footPlacement.legLength = stand_legLength;
+    footPlacement.xOffsetL = gaitProfile.xOffsetL;
+    footPlacement.yOffsetL = gaitProfile.yOffsetL;
+    footPlacement.zOffsetW = gaitProfile.zOffsetW;
+    footPlacement.swingTrajectoryPhase = gaitProfile.swingTrajectoryPhase;
+    footPlacement.swingTrajectoryWindow = gaitProfile.swingTrajectoryWindow;
+    footPlacement.zStretchStartPhi = gaitProfile.zStretchStartPhi;
+    footPlacement.zStretchStep = gaitProfile.zStretchStep;
+    footPlacement.zStretchMin = gaitProfile.zStretchMin;
+
+    WBC_solv.cfg_pos_err_clamp_xy = gaitProfile.posErrClampXY;
+    WBC_solv.cfg_pos_err_clamp_z = gaitProfile.posErrClampZ;
+    WBC_solv.cfg_posrot_kp = gaitProfile.posRotKp;
+    WBC_solv.cfg_posrot_kd = gaitProfile.posRotKd;
+    WBC_solv.cfg_posrot_kp_x = gaitProfile.posRotKpX;
+    WBC_solv.cfg_posrot_kp_pitch = gaitProfile.posRotKpPitch;
+    WBC_solv.cfg_posrot_kd_pitch = gaitProfile.posRotKdPitch;
+    WBC_solv.cfg_swing_kp = gaitProfile.swingLegKp;
+    WBC_solv.cfg_swing_kd = gaitProfile.swingLegKd;
 
     std::vector<double> motors_pos_des(robot_nv - 6, 0);
     std::vector<double> motors_pos_cur(robot_nv - 6, 0);
@@ -121,6 +175,13 @@ int main(int argc, char **argv)
     logger.addIterm("base_rpy", 3);
     logger.addIterm("eul_est", 3);
     logger.addIterm("Ufe", 13);
+    logger.addIterm("phi", 1);
+    logger.addIterm("tSwing", 1);
+    logger.addIterm("js_vel_des", 3);
+    logger.addIterm("js_omega_des", 3);
+    logger.addIterm("swingDesPosCur_W", 3);
+    logger.addIterm("swingDesPosFinal_W", 3);
+    logger.addIterm("qpStatus_MPC", 1);
     logger.addIterm("legState", 1);
     logger.addIterm("motionState", 1);
 
@@ -133,6 +194,14 @@ int main(int argc, char **argv)
     double startSteppingTime = 7;
     double startWalkingTime = 10;
     double simEndTime = 200;
+    const bool autoWalk = (std::getenv("OPENLOONG_AUTOWALK") != nullptr) &&
+                          (std::string(std::getenv("OPENLOONG_AUTOWALK")) == "1");
+    bool autoWalkStarted = false;
+    const char *simEndEnv = std::getenv("OPENLOONG_SIM_END");
+    if (simEndEnv != nullptr)
+    {
+        simEndTime = std::max(1.0, std::atof(simEndEnv));
+    }
 
     mjtNum simstart = mj_data->time;
     double simTime = mj_data->time;
@@ -170,32 +239,32 @@ int main(int argc, char **argv)
 
                 if (buttonState.key_a && RobotState.motionState != DataBus::Stand)
                 {
-                    if (jsInterp.wzLGen.yDes < 0)
-                        jsInterp.setWzDesLPara(0, 0.5);
+                        if (jsInterp.wzLGen.yDes < 0)
+                        jsInterp.setWzDesLPara(0, gaitProfile.wzStopRampTime);
                     else
-                        jsInterp.setWzDesLPara(0.2, 1.0);
+                        jsInterp.setWzDesLPara(turnRateCmd, gaitProfile.wzRampTime);
                 }
                 if (buttonState.key_d && RobotState.motionState != DataBus::Stand)
                 {
                     if (jsInterp.wzLGen.yDes > 0)
-                        jsInterp.setWzDesLPara(0, 0.5);
+                        jsInterp.setWzDesLPara(0, gaitProfile.wzStopRampTime);
                     else
-                        jsInterp.setWzDesLPara(-0.2, 1.0);
+                        jsInterp.setWzDesLPara(-turnRateCmd, gaitProfile.wzRampTime);
                 }
 
                 // W: forward at current xv_des
                 if (buttonState.key_w && RobotState.motionState != DataBus::Stand)
-                    jsInterp.setVxDesLPara(xv_des, 2.0);
+                    jsInterp.setVxDesLPara(xv_des, gaitProfile.vxRampTime);
 
                 // S: backward at current xv_des (negative)
                 if (buttonState.key_s && RobotState.motionState != DataBus::Stand)
-                    jsInterp.setVxDesLPara(-fabs(xv_des), 2.0);
+                    jsInterp.setVxDesLPara(-fabs(xv_des), gaitProfile.vxRampTime);
 
                 // J: emergency stop to stand
                 if (buttonState.key_j && RobotState.motionState != DataBus::Stand)
                 {
-                    jsInterp.setVxDesLPara(0, 0.5);
-                    jsInterp.setWzDesLPara(0, 0.5);
+                    jsInterp.setVxDesLPara(0, gaitProfile.vxStopRampTime);
+                    jsInterp.setWzDesLPara(0, gaitProfile.wzStopRampTime);
                     if (RobotState.motionState == DataBus::Walk)
                     {
                         RobotState.motionState = DataBus::Walk2Stand;
@@ -211,7 +280,7 @@ int main(int argc, char **argv)
                     if (RobotState.motionState != DataBus::Stand && std::fabs(jsInterp.vxLGen.yDes) > 1e-3)
                     {
                         const double dir = (jsInterp.vxLGen.yDes >= 0.0) ? 1.0 : -1.0;
-                        jsInterp.setVxDesLPara(dir * xv_des, 0.6);
+                        jsInterp.setVxDesLPara(dir * xv_des, gaitProfile.speedUpdateRampTime);
                     }
                     std::cout << "[Speed] xv_des=" << xv_des << " m/s" << std::endl;
                 }
@@ -223,7 +292,7 @@ int main(int argc, char **argv)
                     if (RobotState.motionState != DataBus::Stand && std::fabs(jsInterp.vxLGen.yDes) > 1e-3)
                     {
                         const double dir = (jsInterp.vxLGen.yDes >= 0.0) ? 1.0 : -1.0;
-                        jsInterp.setVxDesLPara(dir * xv_des, 0.6);
+                        jsInterp.setVxDesLPara(dir * xv_des, gaitProfile.speedUpdateRampTime);
                     }
                     std::cout << "[Speed] xv_des=" << xv_des << " m/s" << std::endl;
                 }
@@ -231,8 +300,19 @@ int main(int argc, char **argv)
                 if (buttonState.key_h)
                 {
                     jsInterp.setIniPos(RobotState.q(0), RobotState.q(1), RobotState.base_rpy(2));
-                    jsInterp.setWzDesLPara(0, 0.3);
+                    jsInterp.setWzDesLPara(0, gaitProfile.headingResetRampTime);
                     std::cout << "[Joystick] H: reset heading reference" << std::endl;
+                }
+
+                if (autoWalk && !autoWalkStarted && simTime > (openLoopCtrTime + 0.01) &&
+                    RobotState.motionState == DataBus::Stand)
+                {
+                    gaitScheduler.start();
+                    jsInterp.setIniPos(RobotState.q(0), RobotState.q(1), RobotState.base_rpy(2));
+                    RobotState.motionState = DataBus::Walk;
+                    jsInterp.setVxDesLPara(xv_des, gaitProfile.autoStartRampTime);
+                    autoWalkStarted = true;
+                    std::cout << "[AutoWalk] started with vx_des=" << xv_des << " m/s" << std::endl;
                 }
             }
 
@@ -399,6 +479,13 @@ int main(int argc, char **argv)
             logger.recItermData("base_rpy", RobotState.base_rpy);
             logger.recItermData("eul_est", RobotState.eul_est);
             logger.recItermData("Ufe", RobotState.fe_react_tau_cmd);
+            logger.recItermData("phi", RobotState.phi);
+            logger.recItermData("tSwing", RobotState.tSwing);
+            logger.recItermData("js_vel_des", RobotState.js_vel_des);
+            logger.recItermData("js_omega_des", RobotState.js_omega_des);
+            logger.recItermData("swingDesPosCur_W", RobotState.swingDesPosCur_W);
+            logger.recItermData("swingDesPosFinal_W", RobotState.swingDesPosFinal_W);
+            logger.recItermData("qpStatus_MPC", static_cast<double>(RobotState.qpStatus_MPC));
             logger.recItermData("legState", RobotState.legState);
             logger.recItermData("motionState", RobotState.motionState);
             logger.finishLine();
