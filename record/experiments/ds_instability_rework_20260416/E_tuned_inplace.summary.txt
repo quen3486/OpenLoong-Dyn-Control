@@ -1,0 +1,1 @@
+case=E_tuned_inplace walk_samples=3502 qp_bad=0(0.00%) zmin=-0.5007 first95=3.459 first80=4.649 vx_mae=0.2448 roll_rms=0.4433 pitch_rms=0.6023 ds_ratio=8.14%

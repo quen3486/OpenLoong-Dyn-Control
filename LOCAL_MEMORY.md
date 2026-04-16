@@ -214,3 +214,318 @@
 - 速度平顺：`|d(vx)/dt|` RMS/peak 下降为正向。
 - 跟踪性能：`vx MAE` 不恶化（允许小幅波动）。
 - 步态相时序：日志应出现稳定 `LSt-DSt-RSt-DSt` 轮转，`DSt` 持续时间接近配置值。
+
+- 2026-04-15 21:29:00 +0800：
+  - 针对“`t_swing` 调大后下蹲走不动”完成复现实验与参数敏感性分析（`walk_mpc_wbc_v4`, `OPENLOONG_AUTOWALK=1`, `SIM_END=12s`）：
+    - A/B-1（仅改 `t_swing`）：
+      - `t_swing=0.4`：稳定，`z_min(t>=10)=0.9995`，`vx_mean(t>=10)=0.3657`
+      - `t_swing=0.65`（当前配置）：明显失稳下蹲，`first z<0.95 @ 4.631s`，`z_min(t>=10)=-0.6367`，`vx_mean(t>=10)=-0.3508`
+    - A/B-2（`t_swing=0.65` + 仅下调 `phi_switch_min=0.35`）：有缓解但未根治，`z_min(t>=10)=-0.2176`
+    - A/B-3（`t_swing=0.65` + `phi_switch_min=0.35` + `wbc_pos_err_clamp_z=0.02`）：
+      - 在 `forward_speed_default=0.4` 下恢复稳定：`first z<0.95 = None`，`z_min(t>=10)=0.9798`，`z_mean(t>=10)=0.9978`，`vx_mean(t>=10)=0.3852`
+  - 结论：
+    - 失稳主因是“无双支撑架构下，`t_swing` 增大导致单支撑驻留时间显著变长（由约0.3s抬升到约0.35~0.42s）”，而当前 `Walk` 模式垂向误差限幅 `wbc_pos_err_clamp_z=0.005` 过小，难以抑制下蹲累积。
+    - `phi_switch_min` 需随 `t_swing` 联动下调；否则触地后仍会因相位门限滞后造成晚切换。
+  - 建议落地参数（在未引入双支撑 DSt 前）：
+    - 若继续用 `t_swing=0.65`：优先联动
+      - `phi_switch_min: 0.55 -> 0.35`
+      - `wbc_pos_err_clamp_z: 0.005 -> 0.02`
+    - 中长期仍建议按计划引入可配置双支撑相，降低长单支撑对参数窗口的敏感性。
+- 2026-04-15 22:34:12 +0800：
+  - 完成“`t_swing` 匹配 `phi_switch_min` + 双支撑相 + MPC 结构参数可配置”代码落地：
+    - `common/gait_profile.h/.cpp` 与三套 `gait_profile_*.json` 新增参数：
+      - `phi_switch_auto_design`、`phi_switch_design_ref_t_swing`、`phi_switch_design_ref`、`phi_switch_design_power`、`phi_switch_design_min/max`
+      - `enable_double_support`、`t_double_support`、`phi_ds_enter_min`、`fz_ds_switch_threshold`
+      - `mpc_prediction_horizon`、`mpc_control_horizon`
+    - `algorithm/gait_scheduler.*` 重构：
+      - 新增 `phi_switch_min` 设计器（按 `t_swing` 自适应）
+      - 新增 Walk 过程 `LSt/RSt <-> DSt` 双支撑过渡状态机
+      - 新增 `phiDS`、`isDoubleSupport`、`phiSwitchMinRuntime` 写回 DataBus
+    - `common/data_bus.h` 新增字段：`phiDS/tDoubleSupport/isDoubleSupport/phiSwitchMinRuntime/mpcPredictionHorizon/mpcControlHorizon`
+    - `algorithm/foot_placement.cpp` 新增 DSt 保护：双支撑阶段冻结摆腿目标，避免无效轨迹插值
+    - `algorithm/wbc_priority*.cpp`（3机型）补齐 DSt 兼容：
+      - `static_Contact` 在 DSt 下改为双脚约束（12维）
+      - `SwingLeg` 在 DSt 下置零任务（不再下发摆腿约束）
+    - `algorithm/StateEst.cpp` 修正 legState 判断：`DataBus::Stand -> DataBus::DSt`
+    - `algorithm/mpc.*` 完成结构可配置：
+      - 新增 `setHorizon(pred, ctrl)` / `getPredictionHorizon()` / `getControlHorizon()`
+      - 预测/控制步数改为运行时生效（上限 `N<=10, ch<=6`）
+      - QP 求解改为“有效维度直接求解”，避免 padded 变量引入病态
+      - MPC 相位预估新增 DSt 分支（使用 `phiDS/tDoubleSupport`）
+    - `demo/*walk*.cpp` 接线：
+      - 下发新 gaitScheduler 参数
+      - MPC demo 下发 `MPC_solv.setHorizon(...)`
+      - MPC demo 新增日志字段：`phiDS/isDoubleSupport/phiSwitchMinRuntime`
+  - 编译验证：`cmake --build build -j4` 通过（4个 demo 全部链接成功）。
+  - 冒烟仿真验证：
+    - 默认配置（`enable_double_support=false`）：
+      - `OPENLOONG_AUTOWALK=1 OPENLOONG_SIM_END=8 ./walk_mpc_wbc_v4`
+      - 日志检查：`qp_bad=4`，`phiDS=[0.0000,0.0167]`（仅极短过渡）
+    - 临时启用双支撑（仅测试时改 v4 配置后恢复）：
+      - `enable_double_support=true, t_double_support=0.08, phi_ds_enter_min=0.30`
+      - `phiDS=[0.0000,0.9875]`，`isDS=[0,1]`，说明 DSt 状态机生效
+      - `qp_bad=4`（与默认同量级）
+  - 结论：
+    - 三项改造均已落地并可运行；
+    - 建议下一轮做 `t_double_support / phi_ds_enter_min / fz_ds_switch_threshold` 参数扫描，进一步压低 `qp_bad` 并评估平顺性收益。
+- 2026-04-16 08:57:47 +0800：
+  - 继续执行 P0 改造后的回归核对与 A/B 数据采集（`walk_mpc_wbc_v4`）：
+    - 重新编译：`cmake --build build -j4` 通过。
+    - 配置/链路核对：
+      - `common/gait_profile_v4.json` 已包含新增字段（`phi_switch_auto_design`、`enable_double_support`、`mpc_prediction_horizon/mpc_control_horizon` 等）。
+      - `MPC` 三个 demo 入口均在构造后显式下发：`setRobotMass/setFrictionCoeff/setBodyInertia/setFootSupportPolygon/setWrenchLimits/setHorizon`，`m=1.0/miu=0.7` 仅为构造默认兜底值。
+  - 新增 A/B 对照数据（日志已分目录保存）：
+    - 输出目录：`record/experiments/ds_ab_20260416/`
+      - `v4_ds_off/`：`enable_double_support=false`
+      - `v4_ds_on/`：`enable_double_support=true`（其余参数不变）
+    - 运行命令（两组一致）：`OPENLOONG_AUTOWALK=1 OPENLOONG_SIM_END=12 ./walk_mpc_wbc_v4`
+    - 指标（同一统计口径）：
+      - DS Off：`qp_bad=4 (0.033%)`，`ds_ratio=0.000%`，`vx_mae=0.4855`，`roll_rms=1.2888`，`pitch_rms=0.6903`，`first z<0.95 @ 3.833s`
+      - DS On ：`qp_bad=4 (0.033%)`，`ds_ratio=10.998%`，`vx_mae=0.3499`，`roll_rms=0.8933`，`pitch_rms=0.6371`，`first z<0.95 @ 3.685s`
+  - 结论：
+    - 在当前 `t_swing=0.85` 下，**仅开启双支撑相不足以单独解决“起走后下蹲走不动”问题**；仍在约 3.7s 左右进入失稳。
+    - 双支撑对速度/姿态误差有一定改善（`vx_mae`、`roll_rms`下降），但未改变主要失稳机制（长单步周期 + 约束/增益失配）。
+  - 状态恢复：
+    - 测试后已恢复 `common/gait_profile_v4.json` 为原状态（`enable_double_support=false`）。
+- 2026-04-16 09:08:14 +0800：
+  - 继续推进“优化 MPC 结构 + 参数可配置”第二轮落地：
+    - 将 MPC 可配置上限由 `N<=10/ch<=6` 扩展为 `N<=20/ch<=10`：
+      - `algorithm/mpc.h`：`mpc_N_max=20`、`ch_max=10`
+      - `common/gait_profile.cpp`：`mpcPredictionHorizon` 限幅改为 `1..20`，`mpcControlHorizon` 改为 `1..10`
+      - `common/gait_profile_azure.json` / `gait_profile_v4.json` / `gait_profile_v4_leg.json` 注释同步更新
+    - 为避免 Eigen 栈分配上限报错（`OBJECT_ALLOCATED_ON_STACK_IS_TOO_BIG`），将 `mpc` 内超大固定矩阵改为动态分配（`MatrixXd/VectorXd`）：
+      - `Aqp/Aqp1/Bqp1/Bqp/Cqp1/Cqp/Ufe/Xd/K/M/H/c/u_low/u_up/As/bs`
+    - 三个 MPC demo 增加日志项：
+      - `mpcPredictionHorizon`
+      - `mpcControlHorizon`
+  - 验证结果：
+    - 编译：`cmake --build build -j4` 通过。
+    - 生效性测试（临时 `v4` 设 `N=20/ch=8`，后恢复）：
+      - 命令：`OPENLOONG_AUTOWALK=1 OPENLOONG_SIM_END=8 ./walk_mpc_wbc_v4`
+      - 日志末端确认：`mpcPredictionHorizon=20`、`mpcControlHorizon=8`（配置生效）
+      - 但 `qp_bad=4868/8007 (60.797%)`，说明“仅拉长时域”会显著增加当前参数下 QP 不可行/失败风险。
+    - 默认配置回归（恢复 `N=10/ch=3`）：
+      - 同命令 8s：`hN=10`、`hC=3` 全程一致，`qp_bad=0/8007 (0.000%)`。
+  - 结论：
+    - “更长时域”能力已打通并可追踪生效；
+    - 下一步必须配套做 MPC 权重/约束整定（尤其 `L/K/alpha` 与接触约束），否则大时域下稳定性会明显恶化。
+- 2026-04-16 09:24:20 +0800：
+  - 针对“`N=18/ch=8` 运行报错”完成复现与定位（`walk_mpc_wbc_v4`，自动行走）：
+    - 终端报错为 `qpOASES: ERROR: Maximum number of working set recalculations performed`，来自 `algorithm/mpc.cpp` 中 `qpAct.init(...)` 后失败分支。
+    - 10s 复现实验：`qp_bad=6079/10013 (60.71%)`，首个 bad 时间 `3.015s`（与进入 Walk/MPC 时刻一致）。
+  - 控制步长敏感性（固定 `N=18`，6s快速回归）：
+    - `ch=3/4/5`：`qp_bad=0`
+    - `ch=6`：`qp_bad=5/6001 (0.08%)`
+    - `ch=7`：`qp_bad=695/6001 (11.58%)`
+    - `ch=8`：`qp_bad=2642/6001 (44.03%)`
+  - 额外对照：
+    - `N=10/ch=8` 仍高失败：`qp_bad=1812/6001 (30.19%)`（说明核心矛盾主要在 `ch` 偏大，而非 `N` 本身）。
+    - `N=18/ch=8` 降速到 `vx=0.2`：`qp_bad=1937/6001 (32.28%)`（仅部分缓解）。
+    - 临时提高 `set_weight` 的 `u_weight`：
+      - `1e-6 -> 1e-4`：`qp_bad=655/6001 (10.91%)`
+      - `1e-6 -> 1e-3`：`qp_bad=530/6001 (8.83%)`
+    - 结论：高 `ch` 下的主要问题是 QP 数值病态/退化（控制正则过弱），非单纯速度过高。
+  - 建议优先级：
+    - P0：先将 `ch` 控制在 `<=6`（`N` 可继续提升至 16~18），确保主链路稳定。
+    - P1：将 `u_weight` 做成配置项（建议起点 `1e-4~1e-3`），按 `ch` 自适应增大。
+    - P2：补充日志 `qp_nWSR_MPC/qp_cpuTime_MPC`，并加“连续 QP fail 退化策略”（自动回退 `ch`）。
+- 2026-04-16 09:51:01 +0800：
+  - 按需求完成“降低主控制频率 + 降低 MPC 频率”改造，采用配置驱动：
+    - `common/gait_profile.*` 新增配置项：
+      - `main_control_dt`：主控制链路周期
+      - `mpc_control_dt`：MPC求解周期
+    - `demo` 接线完成：
+      - `walk_mpc_wbc_v4.cpp`
+      - `walk_mpc_wbc_leg.cpp`
+      - `walk_mpc_wbc_joystick.cpp`
+      - `walk_wbc_joystick.cpp`（仅主控制）
+    - 技术实现：
+      - 物理仿真仍按 MuJoCo `timestep` 运行；
+      - 主控制按 `main_control_dt` 做 decimation（持有上次力矩）；
+      - MPC 按 `mpc_control_dt` 在主控制周期内再次 decimation；
+      - 启动打印 `[LoopRate] sim/main/mpc`，并写日志字段 `mainControlDt/mpcControlDt`。
+  - 默认参数调整：
+    - `common/gait_profile_v4.json` 设置为：
+      - `main_control_dt=0.002`（500Hz）
+      - `mpc_control_dt=0.010`（100Hz）
+  - 验证：
+    - `cmake --build build -j4` 通过。
+    - `OPENLOONG_AUTOWALK=1 OPENLOONG_SIM_END=6 ./walk_mpc_wbc_v4`：
+      - 启动打印：`sim=1000Hz, main=500Hz, mpc=100Hz`
+      - 日志确认：`mainControlDt=0.002`, `mpcControlDt=0.01`
+      - `qp_bad=5/3001 (0.17%)`（较低但仍有偶发 bad）。
+- 2026-04-16 10:25:13 +0800：
+  - 完成“步态相位/换腿触发参数 + 双支撑稳定性 + t_swing稳定性”专项验证（`walk_mpc_wbc_v4`, `OPENLOONG_AUTOWALK=1`, `SIM_END=8s`）。
+  - 当前主配置（v4）：`t_swing=0.60`、`phi_switch_auto_design=true`、`phi_switch_design_ref_t_swing=0.60`、`enable_double_support=true`、`t_double_support=0.05`、`main/mpc=500/100Hz`。
+  - 结论（核心）：
+    1) `DS` 不是必然不稳：`t_swing=0.60` 下 DS开/关都稳定（`qp_bad=0`，无跌落）。
+    2) DS 失稳主要由 `t_double_support` 偏长触发：`t_double_support=0.10` 时快速跌落（`first z<0.95 @ 4.267s`，`z_min=-0.592`）。
+    3) `t_swing` 改动的失稳具有“双机制”：
+       - `t_swing` 变短且自动设计参考不匹配时，`phi_switch_runtime` 会被推高（`t_swing=0.40` 时出现到 `0.9`），导致换腿过晚；
+       - `t_swing` 变长时，单支撑驻留拉长，虽然 `qp_bad` 不高但姿态/高度仍会塌陷。
+  - 关键 A/B 数据：
+    - `base_ds_on_t060`：稳定；`ds_ratio=6.87%`，`z_min=0.9834`。
+    - `ds_off_t060`：稳定；`ds_ratio=0%`，`z_min=0.9862`。
+    - `ds_on_long_tds010`：失稳；`ds_ratio=12.49%`，`z_min=-0.5920`。
+    - `ds_on_t040`（auto设计沿用0.60参考）：失稳；`phiSwitch=[0.600,0.900]`。
+    - `ds_on_t080`：失稳；`phiSwitch=[0.450,0.600]`，`z_min=-0.6341`。
+  - 修复型验证：
+    - `t040_fix_auto_ref`（把 auto 参考改到 0.40）恢复稳定：`z_min=0.9928`，`qp_bad=0`。
+    - `t080_combo_A`（`t_swing=0.8` + `phi_switch_min=0.35` + DS关 + `wbc_pos_err_clamp_z=0.03` + 低速0.2）明显改善：`z_min=0.8352`，`qp_bad=0`（仅末端轻微下沉）。
+    - `t080` 场景下盲目加快主/MPC频率或只延长MPC步长未带来稳定收益，存在反效果。
+- 2026-04-16 10:38:40 +0800：
+  - 按“先低速稳定 + 加长摆动时间/步长”完成参数优化与验证，已写入 `common/gait_profile_v4.json`：
+    - `t_swing=0.75`
+    - `enable_double_support=false`
+    - `phi_switch_auto_design=false`
+    - `phi_switch_min=0.35`
+    - `fz_switch_threshold=180`
+    - `foot_kp_vx=0.035`
+    - `x_offset_l=-0.04`
+    - `step_height=0.055`
+    - `wbc_pos_err_clamp_z=0.03`
+    - `forward_speed_default=0.2`
+    - `main_control_dt=0.002`, `mpc_control_dt=0.010`
+    - `mpc_prediction_horizon=20`, `mpc_control_horizon=5`
+  - 低速回归（10s，AutoWalk）：
+    - `qp_bad=0/5007`
+    - `first z<0.95=None`
+    - `z_min=0.9761`, `z_mean=1.0008`
+    - `roll_rms=0.0348`, `pitch_rms=0.0174`
+    - 步长代理 `step_abs=0.0516`（较 `t_swing=0.70` 组 0.0496 略增）
+  - 高速对照（临时改 `forward_speed_default=0.4`，其余保持）：
+    - `qp_bad=0/5007`，但姿态/高度明显失稳：
+    - `first z<0.95 @ 6.529s`, `z_min=-0.6238`, `roll_rms=0.5473`, `pitch_rms=0.5830`
+    - 说明当前“长摆动+平缓”参数是低速优先解，不适合作为高速通用参数。
+- 2026-04-16 11:01:33 +0800：
+  - 针对用户反馈“空格进入行走后原地踏步不稳、但立即前走不倒；双支撑开启后反而更易摔倒”完成复现与修复验证（`walk_mpc_wbc_v4`，`OPENLOONG_AUTOWALK=1`，`SIM_END=10s`）。
+  - 复现结论：
+    - 原地（`v=0`, DS关）：`qp_bad=0`，但 `first z<0.95 @ 9.307s`，`zmin=-0.9972`（会摔）。
+    - 前走（`v=0.2`, DS关）：`qp_bad=0`，`first z<0.95=None`，`zmin=0.9761`（稳定）。
+    - DS开启且 `t_double_support=0.05`：原地和前走均明显更差（约 6s 左右跌落）。
+    - DS开启但缩短到 `t_double_support=0.03`：原地恢复稳定。
+  - 原因判断：
+    - 当前实现里 DS 仅在“时序和触发阈值匹配”时增稳；DS过长会放大相位与接触切换误差，反而更不稳。
+    - 原地踏步时推进动量接近 0，长期交替支撑+长摆动更容易累积姿态误差。
+  - 落地修复：新增“按期望速度自适应启用 DS”，低速/原地启用 DS，前走自动退回单支撑节律。
+    - 代码：`gait_scheduler` 引入 `dsEnableSpeedMax`；运行时条件变为 `enableDoubleSupport && (|v_des_xy|<=dsEnableSpeedMax)`。
+    - 配置：`gait_profile*.json` 新增 `ds_enable_speed_max`（默认 `0.08`）。
+  - 最终验证（自适应 DS）：
+    - `ADAPTIVE_INPLACE`：`qp_bad=0`，`zmin=0.9823`，`first95=None`，`ds_ratio_walk=6.42%`。
+    - `ADAPTIVE_WALK`：`qp_bad=0`，`zmin=0.9761`，`first95=None`，`ds_ratio_walk=0.00%`。
+  - 结论：用户两类现象已可解释且已通过参数+逻辑联合修复；在当前低速长摆动配置下，稳定性恢复到可用。
+- 2026-04-16 11:48:09 +0800：
+  - 用户反馈“仅改 `N=20/ch=6` 后有报错，视觉上摆动时间变长（不确定是平滑还是卡顿）”已完成专项复现与量化。
+  - 配置前提：其余参数按当前用户重置值（`t_swing=0.4`、`DS关闭`、`main=1kHz`、`mpc=200Hz`）仅切换 horizon。
+  - 10s A/B（`walk_mpc_wbc_v4`, AutoWalk）结果：
+    - `N20/ch6`：`qp_bad=25/7003 (0.36%)`，控制台 `wsr_error=5`；`tSwing_avg=0.4000`，`step_period_avg=0.3499s`。
+    - `N10/ch3`：`qp_bad=0`，无报错；`tSwing_avg=0.4000`，`step_period_avg=0.3493s`。
+    - `N20/ch5`：`qp_bad=0`，无报错；`tSwing_avg=0.4000`，`step_period_avg=0.3496s`。
+  - 30s 长时复验：
+    - `N20/ch6`：`qp_bad=125/26995 (0.46%)`，`wsr_error=25`；未跌倒（`z_min=0.9882`）。
+    - `N10/ch3`：`qp_bad=0`，无报错；未跌倒（`z_min=0.9891`）。
+  - 关键结论1（步态是否“真的变长”）：
+    - **仿真时间域的步态周期未变**（`tSwing/step_period` 基本一致）。
+    - 视觉“变长”主要来自实时率下降（墙钟时间变慢）和局部QP失败引起的短时卡顿。
+  - 关键结论2（实时率证据，20s仿真耗时）：
+    - `N20/ch6`：`elapsed=33.10s`（约 `0.60x` 实时）
+    - `N10/ch3`：`elapsed=22.00s`（约 `0.91x` 实时）
+    - `N20/ch5`：`elapsed=27.97s`（约 `0.71x` 实时）
+  - 关键结论3（报错根因）：
+    - `N20/ch6` 在 `mpc_control_dt=0.005`（200Hz）下问题规模增大，QP预算不足，触发 `Maximum number of working set recalculations`。
+    - 预算验证：同为 `N20/ch6`，将 `mpc_control_dt` 调到 `0.010`（100Hz）后，10s 内 `wsr_error=0`、`qp_bad=0`。
+  - 建议优先级：
+    - P0：若坚持 `N=20`，先用 `ch=5`（保留平滑收益且无报错）。
+    - P1：若必须 `ch=6`，将 `mpc_control_dt` 提到 `0.010` 或更高，先消除QP预算超限。
+    - P2：后续再引入 `u_weight` 配置化与随 `ch` 自适应正则，降低大 `ch` 数值病态风险。
+  - 数据目录：
+    - `record/experiments/horizon_recheck_20260416/`
+    - `record/experiments/horizon_recheck_20260416_long/`
+    - `record/experiments/horizon_recheck_20260416_rt/`
+    - `record/experiments/horizon_recheck_20260416_budget/`
+    - `record/experiments/horizon_recheck_20260416_budget_rt/`
+- 2026-04-16 13:28:56 +0800：
+  - 按用户要求完成“配置命名去 gait + 按功能模块重组”：
+    - 文件命名迁移：
+      - `common/gait_profile.h/.cpp` -> `common/controller_config.h/.cpp`
+      - `common/gait_profile_azure.json` -> `common/controller_config_azure.json`
+      - `common/gait_profile_v4.json` -> `common/controller_config_v4.json`
+      - `common/gait_profile_v4_leg.json` -> `common/controller_config_v4_leg.json`
+    - API/类型命名迁移：
+      - `GaitProfile` -> `ControllerConfig`
+      - `loadGaitProfile(...)` -> `loadControllerConfig(...)`
+    - Demo 接线全量切换：
+      - `demo/walk_wbc_joystick.cpp`
+      - `demo/walk_mpc_wbc_joystick.cpp`
+      - `demo/walk_mpc_wbc_v4.cpp`
+      - `demo/walk_mpc_wbc_leg.cpp`
+      - include、变量名、日志前缀、JSON 路径均改为 `controller_config*`
+  - 三套 JSON 按模块重新分组（保持原有参数值不变）：
+    - 控制循环频率
+    - 步态调度（GaitScheduler）
+    - 落脚规划（FootPlacement）
+    - 命令整形（JoyStickInterpreter）
+    - Demo速度档位
+    - WBC（Walk任务）
+    - 接触模型（MPC/WBC共享）
+    - MPC机型参数与接触约束
+  - 兼容性说明：
+    - Azure 配置继续保留“速度档位不在文件覆盖、沿用 demo 默认值”的行为（未新增速度键，避免行为漂移）。
+  - 编译验证：
+    - 先 `cmake --build build -j4` 触发旧 GLOB 缓存报错（仍指向已删除 `gait_profile.cpp`）。
+    - 重新 `cmake -S . -B build` 后再编译通过，4 个 demo 可执行均成功链接。
+- 2026-04-16 14:37:25 +0800：
+  - 主题：用户反馈“当前配置启用双支撑后，站立踏步阶段非常不稳定”专项分析与优化。
+  - 关键定位（两轮A/B）：
+    - 轮1（基于当时现状）显示：系统存在“全局不稳 + DS加剧”叠加，无法仅凭 DS 开关解释。
+    - 轮2（先构造稳定基线，再单独改 DS）明确：
+      - `t_double_support=0.05` 会显著触发失稳；
+      - `t_double_support=0.03` 可恢复原地踏步稳定；
+      - 低速前走中若强制 DS（`ds_enable_speed_max=0.5`）会明显恶化；
+      - `ds_enable_speed_max=0.08` 可使前走阶段基本退回单支撑节律，稳定性明显更好。
+  - 关键量化数据（round2）：
+    - `H_base_inplace_no_ds`: `zmin=0.9769`, `first95=None`, `roll_rms=0.0358`。
+    - `I_base_inplace_ds_t05`: `zmin=-0.8360`, `first95=6.195s`（跌倒）。
+    - `J_base_inplace_ds_t03`: `zmin=0.9798`, `first95=None`（稳定）。
+    - `M_base_walk_ds_forced(vmax=0.5)`: `zmin=-0.7885`, `first95=7.629s`（跌倒）。
+  - 落地P0配置（`common/controller_config_v4.json`）：
+    - `phi_switch_min: 0.6 -> 0.35`
+    - `fz_switch_threshold: 220 -> 180`
+    - `t_double_support: 0.05 -> 0.03`
+    - `fz_ds_switch_threshold: 180 -> 200`
+    - `ds_enable_speed_max: 0.5 -> 0.08`
+    - `step_height: 0.08 -> 0.055`
+    - `wbc_pos_err_clamp_z: 0.005 -> 0.03`
+    - 同步修正注释：`main_control_dt=0.002` 为500Hz，`mpc_control_dt=0.01` 为100Hz。
+  - 最终验证（P0配置）：
+    - `final_walk`（配置原样，默认0.2m/s）：`qp_bad=0`, `zmin=0.9927`, `first95=None`, `console_wsr=0`。
+    - `final_inplace`（临时将 `forward_speed_default=0` 做原地踏步验证）：`qp_bad=0`, `zmin=0.9927`, `first95=None`, `console_wsr=0`。
+  - 实验目录：
+    - `record/experiments/ds_instability_rework_20260416/`
+    - `record/experiments/ds_instability_rework_20260416_round2/`
+    - `record/experiments/ds_instability_rework_20260416_final/`
+- 2026-04-16 15:12:20 +0800：
+  - 按用户要求“去掉所有双腿支撑相关部分”，完成行走链路中 DS 功能移除（保留 `Stand/Walk2Stand` 的 `DSt` 状态语义，不再有行走过程双支撑相）。
+  - 代码改动：
+    - `algorithm/gait_scheduler.h/.cpp`
+      - 移除 DS 配置与状态字段：`enableDoubleSupport/tDoubleSupport/phiDsEnterMin/fzDsSwitchThreshold/dsEnableSpeedMax/phiDS`。
+      - 移除 DS 相关函数：`shouldEnterDoubleSupport* / enterDoubleSupport / exitDoubleSupport*`。
+      - `step()` 删除行走过程 DS 分支，恢复为单支撑换腿逻辑（LSt<->RSt）。
+    - `common/data_bus.h`
+      - 删除 DS 数据字段：`phiDS/tDoubleSupport/isDoubleSupport`。
+    - `algorithm/mpc.cpp`
+      - 删除基于 `phiDS/tDoubleSupport` 的预测分支，统一采用 `phi + i*dt/tSwing` 预测换腿。
+    - `common/controller_config.h/.cpp`
+      - 删除 DS 配置项与解析/限幅：`enable_double_support/t_double_support/phi_ds_enter_min/fz_ds_switch_threshold/ds_enable_speed_max`。
+    - `common/controller_config_azure.json / controller_config_v4.json / controller_config_v4_leg.json`
+      - 删除上述 DS 配置键与注释。
+    - `demo/walk_wbc_joystick.cpp`
+      - 删除 DS 参数下发。
+    - `demo/walk_mpc_wbc_joystick.cpp / walk_mpc_wbc_v4.cpp / walk_mpc_wbc_leg.cpp`
+      - 删除 DS 参数下发。
+      - 删除日志项：`phiDS`、`isDoubleSupport`。
+  - 验证：
+    - 全量编译通过：`cmake --build build -j4`。
+    - `walk_mpc_wbc_v4`（AutoWalk 10s）回归：`qp_bad=0`、`zmin=0.9905`、`first95=None`、`console_wsr=0`。
+    - `walk_mpc_wbc_joystick`（AutoWalk 6s）可正常运行退出（无崩溃）。
+    - 日志列检查：新 `matlabReadDataScript.txt` 中已无 `phiDS/isDoubleSupport` 字段。

@@ -20,6 +20,12 @@ public:
     double dt{0.001};
     double FzThrehold{100};
     double phiSwitchMin{0.6};
+    bool phiSwitchAutoDesign{false};
+    double phiSwitchDesignRefTSwing{0.4};
+    double phiSwitchDesignRef{0.6};
+    double phiSwitchDesignPower{1.0};
+    double phiSwitchDesignMin{0.15};
+    double phiSwitchDesignMax{0.9};
     double fzSwitchThreshold{280.0};
     double fzStopThreshold{200.0};
     double Fz_L_m{0}, Fz_R_m{0};
@@ -38,6 +44,8 @@ public:
     bool touchDown; // touch down event indicator
     int stepNumDes{1}, stepNumCur{0};
 private:
+    double designPhiSwitchMin() const;
+    double phiSwitchMinRuntime{0.6};
     Eigen::VectorXd fe_r_pos_W, fe_l_pos_W, swingStartPos_W, posHip_W, posST_W, hip_r_pos_W, hip_l_pos_W, dq;
     Eigen::VectorXd stanceStartPos_W;
     Eigen::MatrixXd fe_r_rot_W, fe_l_rot_W;
@@ -46,5 +54,3 @@ private:
     int model_nv;
 
 };
-
-

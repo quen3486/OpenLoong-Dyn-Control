@@ -12,8 +12,10 @@ Feel free to use in any purpose, and cite OpenLoong-Dynamics-Control in any styl
 #include "data_bus.h"
 #include "qpOASES.hpp"
 
-const uint16_t  mpc_N = 10;
-const uint16_t  ch = 3;
+const uint16_t  mpc_N_max = 20;
+const uint16_t  ch_max = 10;
+const uint16_t  mpc_N_default = 10;
+const uint16_t  ch_default = 3;
 const uint16_t  nx = 12;
 const uint16_t  nu = 13;
 
@@ -44,6 +46,9 @@ public:
     void    setFootSupportPolygon(double xFrontIn, double xRearIn, double yLeftIn, double yRightIn);
     void    setWrenchLimits(double forceXYMaxIn, double fzMaxScaleIn,
                             double torqueXMaxIn, double torqueYMaxIn, double torqueZMaxIn);
+    void    setHorizon(int predHorizonIn, int ctrlHorizonIn);
+    int     getPredictionHorizon() const;
+    int     getControlHorizon() const;
     double  getRobotMass() const;
 
     void    enable();
@@ -56,34 +61,34 @@ private:
     bool    EN = false;
 
     //single rigid body model
-    Eigen::Matrix<double,nx,nx>   Ac[mpc_N], A[mpc_N];
-    Eigen::Matrix<double,nx,nu>   Bc[mpc_N], B[mpc_N];
+    Eigen::Matrix<double,nx,nx>   Ac[mpc_N_max], A[mpc_N_max];
+    Eigen::Matrix<double,nx,nu>   Bc[mpc_N_max], B[mpc_N_max];
     Eigen::Matrix<double,nx,1>    Cc, C;
 
-    Eigen::Matrix<double,nx*mpc_N,nx>         Aqp;
-    Eigen::Matrix<double,nx*mpc_N,nx*mpc_N>   Aqp1;
-    Eigen::Matrix<double,nx*mpc_N,nu*mpc_N>   Bqp1;
-    Eigen::Matrix<double,nx*mpc_N,nu*ch>      Bqp;
-    Eigen::Matrix<double,nx*mpc_N,1>          Cqp1;
-    Eigen::Matrix<double,nx*mpc_N,1>          Cqp;
+    Eigen::MatrixXd   Aqp;
+    Eigen::MatrixXd   Aqp1;
+    Eigen::MatrixXd   Bqp1;
+    Eigen::MatrixXd   Bqp;
+    Eigen::VectorXd   Cqp1;
+    Eigen::VectorXd   Cqp;
 
-    Eigen::Matrix<double,nu*ch,1>           Ufe;
+    Eigen::VectorXd           Ufe;
     Eigen::Matrix<double,nu,1>              Ufe_pre;
-    Eigen::Matrix<double,nx*mpc_N,1>        Xd;
+    Eigen::VectorXd        Xd;
     Eigen::Matrix<double,nx,1>              X_cur;
     Eigen::Matrix<double,nx,1>              X_cal;
     Eigen::Matrix<double,nx,1>              X_cal_pre;
     Eigen::Matrix<double,nx,1>              dX_cal;
 
     Eigen::Matrix<double,Eigen::Dynamic, Eigen::Dynamic>    L;
-    Eigen::Matrix<double,nu*ch, nu*ch>            K, M;
+    Eigen::MatrixXd            K, M;
     double alpha;
-    Eigen::Matrix<double,nu*ch, nu*ch>          H;
-    Eigen::Matrix<double,nu * ch, 1>              c;
+    Eigen::MatrixXd          H;
+    Eigen::VectorXd              c;
 
-    Eigen::Matrix<double,nu*ch,1>               u_low, u_up;
-    Eigen::Matrix<double,nc*ch, nu*ch>          As;
-    Eigen::Matrix<double,nc*ch,1>               bs;
+    Eigen::VectorXd               u_low, u_up;
+    Eigen::MatrixXd          As;
+    Eigen::VectorXd               bs;
     double      max[6], min[6];
 
     double m, g, miu, delta_foot[4];
@@ -91,29 +96,31 @@ private:
     bool useDataBusInertia;
     Eigen::Matrix<double,3,1>   pCoM;
     Eigen::Matrix<double,6,1>   pf2com, pf2comd, pe;
-    Eigen::Matrix<double,6,1>   pf2comi[mpc_N];
+    Eigen::Matrix<double,6,1>   pf2comi[mpc_N_max];
     Eigen::Matrix<double,3,3>   Ic;
-    Eigen::Matrix<double,3,3>   R_curz[mpc_N];
+    Eigen::Matrix<double,3,3>   R_curz[mpc_N_max];
     Eigen::Matrix<double,3,3>   R_cur;
     Eigen::Matrix<double,3,3>   R_w2f, R_f2w;
 
     int legStateCur;
     int legStateNext;
-    int legState[10];
+    int legState[mpc_N_max];
+    int predHorizon;
+    int ctrlHorizon;
     double  dt;
 
     //qpOASES
     qpOASES::QProblem QP;
-    qpOASES::real_t qp_H[nu*ch * nu*ch];
-    qpOASES::real_t qp_As[nc*ch * nu*ch];
-    qpOASES::real_t qp_c[nu*ch];
-    qpOASES::real_t qp_lbA[nc*ch];
-    qpOASES::real_t qp_ubA[nc*ch];
-    qpOASES::real_t qp_lu[nu*ch];
-    qpOASES::real_t qp_uu[nu*ch];
+    qpOASES::real_t qp_H[nu*ch_max * nu*ch_max];
+    qpOASES::real_t qp_As[nc*ch_max * nu*ch_max];
+    qpOASES::real_t qp_c[nu*ch_max];
+    qpOASES::real_t qp_lbA[nc*ch_max];
+    qpOASES::real_t qp_ubA[nc*ch_max];
+    qpOASES::real_t qp_lu[nu*ch_max];
+    qpOASES::real_t qp_uu[nu*ch_max];
     qpOASES::int_t nWSR=100;
     qpOASES::real_t cpu_time=0.1;
-    qpOASES::real_t xOpt_iniGuess[nu*ch];
+    qpOASES::real_t xOpt_iniGuess[nu*ch_max];
 
 	double			qp_cpuTime;
     int 			qp_Status, qp_nWSR;

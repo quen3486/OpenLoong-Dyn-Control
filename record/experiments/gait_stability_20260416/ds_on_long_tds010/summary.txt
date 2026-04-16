@@ -1,0 +1,12 @@
+case=ds_on_long_tds010
+rows=4004
+mainDt=[0.0020,0.0020],mpcDt=[0.0100,0.0100]
+qp_bad=5(0.12%)
+ds_ratio=12.49%
+phiSwitchRuntime=[0.600,0.600]
+first_z<0.95=4.267
+first_z<0.80=4.353
+z_min(t>=3)=-0.5920,z_mean(t>=3)=0.2248
+roll_rms=1.1202,pitch_rms=0.6979
+vx_mae(t>=3)=0.3683
+

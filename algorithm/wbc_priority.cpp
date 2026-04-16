@@ -172,13 +172,22 @@ void WBC_priority::dataBusRead(const DataBus &robotState)
         fe_pos_sw_W = robotState.fe_r_pos_W;
         fe_rot_sw_W = robotState.fe_r_rot_W;
     }
-    else
+    else if (legStateCur == DataBus::RSt)
     {
         Jc = robotState.J_r;
         dJc = robotState.dJ_r;
         Jsw = robotState.J_l;
         dJsw = robotState.dJ_l;
         fe_pos_sw_W = robotState.fe_l_pos_W;
+        fe_rot_sw_W = robotState.fe_l_rot_W;
+    }
+    else
+    {
+        Jc = Jfe;
+        dJc = dJfe;
+        Jsw = Eigen::MatrixXd::Zero(6, model_nv);
+        dJsw = Eigen::MatrixXd::Zero(6, model_nv);
+        fe_pos_sw_W = 0.5 * (robotState.fe_l_pos_W + robotState.fe_r_pos_W);
         fe_rot_sw_W = robotState.fe_l_rot_W;
     }
 
@@ -408,15 +417,20 @@ void WBC_priority::computeDdq(Pin_KinDyn &pinKinDynIn)
     // task definition
     /// -------- walk -------------
     {
+        const bool inDoubleSupport = (legStateCur == DataBus::DSt);
+        const int contactTaskDim = inDoubleSupport ? 12 : 6;
+        Eigen::MatrixXd contactJ = inDoubleSupport ? Jfe : Jc;
+        Eigen::MatrixXd contactdJ = inDoubleSupport ? dJfe : dJc;
+
         int id = kin_tasks_walk.getId("static_Contact");
-        kin_tasks_walk.taskLib[id].errX = Eigen::VectorXd::Zero(6);
-        kin_tasks_walk.taskLib[id].derrX = Eigen::VectorXd::Zero(6);
-        kin_tasks_walk.taskLib[id].ddxDes = Eigen::VectorXd::Zero(6);
-        kin_tasks_walk.taskLib[id].dxDes = Eigen::VectorXd::Zero(6);
-        kin_tasks_walk.taskLib[id].kp = Eigen::MatrixXd::Identity(6, 6) * 0;
-        kin_tasks_walk.taskLib[id].kd = Eigen::MatrixXd::Identity(6, 6) * 0;
-        kin_tasks_walk.taskLib[id].J = Jc;
-        kin_tasks_walk.taskLib[id].dJ = dJc;
+        kin_tasks_walk.taskLib[id].errX = Eigen::VectorXd::Zero(contactTaskDim);
+        kin_tasks_walk.taskLib[id].derrX = Eigen::VectorXd::Zero(contactTaskDim);
+        kin_tasks_walk.taskLib[id].ddxDes = Eigen::VectorXd::Zero(contactTaskDim);
+        kin_tasks_walk.taskLib[id].dxDes = Eigen::VectorXd::Zero(contactTaskDim);
+        kin_tasks_walk.taskLib[id].kp = Eigen::MatrixXd::Identity(contactTaskDim, contactTaskDim) * 0;
+        kin_tasks_walk.taskLib[id].kd = Eigen::MatrixXd::Identity(contactTaskDim, contactTaskDim) * 0;
+        kin_tasks_walk.taskLib[id].J = contactJ;
+        kin_tasks_walk.taskLib[id].dJ = contactdJ;
         kin_tasks_walk.taskLib[id].W.diagonal() = Eigen::VectorXd::Ones(model_nv);
 
         id = kin_tasks_walk.getId("RedundantJoints");
@@ -506,20 +520,29 @@ void WBC_priority::computeDdq(Pin_KinDyn &pinKinDynIn)
 
         id = kin_tasks_walk.getId("SwingLeg");
         kin_tasks_walk.taskLib[id].errX = Eigen::VectorXd::Zero(6);
-        kin_tasks_walk.taskLib[id].errX.block<3, 1>(0, 0) = swing_fe_pos_des_W - fe_pos_sw_W;
-        desRot = eul2Rot(swing_fe_rpy_des_W(0), swing_fe_rpy_des_W(1), swing_fe_rpy_des_W(2));
-        kin_tasks_walk.taskLib[id].errX.block<3, 1>(3, 0) = diffRot(fe_rot_sw_W, desRot);      
-        kin_tasks_walk.taskLib[id].errX(4) *= 2;
         kin_tasks_walk.taskLib[id].derrX = Eigen::VectorXd::Zero(6);
-        //        kin_tasks_walk.taskLib[id].derrX=-Jsw*dq;
         kin_tasks_walk.taskLib[id].ddxDes = Eigen::VectorXd::Zero(6);
         kin_tasks_walk.taskLib[id].dxDes = Eigen::VectorXd::Zero(6);
-        kin_tasks_walk.taskLib[id].kp = Eigen::MatrixXd::Identity(6, 6) * cfg_swing_kp;
-        kin_tasks_walk.taskLib[id].kd = Eigen::MatrixXd::Identity(6, 6) * cfg_swing_kd;
-        kin_tasks_walk.taskLib[id].J = Jsw;
-        kin_tasks_walk.taskLib[id].J.block(0, 22, 6, 3).setZero(); // exculde waist joints
-        kin_tasks_walk.taskLib[id].dJ = dJsw;
-        kin_tasks_walk.taskLib[id].dJ.block(0, 22, 6, 3).setZero(); // exculde waist joints
+        if (!inDoubleSupport)
+        {
+            kin_tasks_walk.taskLib[id].errX.block<3, 1>(0, 0) = swing_fe_pos_des_W - fe_pos_sw_W;
+            desRot = eul2Rot(swing_fe_rpy_des_W(0), swing_fe_rpy_des_W(1), swing_fe_rpy_des_W(2));
+            kin_tasks_walk.taskLib[id].errX.block<3, 1>(3, 0) = diffRot(fe_rot_sw_W, desRot);
+            kin_tasks_walk.taskLib[id].errX(4) *= 2;
+            kin_tasks_walk.taskLib[id].kp = Eigen::MatrixXd::Identity(6, 6) * cfg_swing_kp;
+            kin_tasks_walk.taskLib[id].kd = Eigen::MatrixXd::Identity(6, 6) * cfg_swing_kd;
+            kin_tasks_walk.taskLib[id].J = Jsw;
+            kin_tasks_walk.taskLib[id].J.block(0, 22, 6, 3).setZero();  // exculde waist joints
+            kin_tasks_walk.taskLib[id].dJ = dJsw;
+            kin_tasks_walk.taskLib[id].dJ.block(0, 22, 6, 3).setZero(); // exculde waist joints
+        }
+        else
+        {
+            kin_tasks_walk.taskLib[id].kp = Eigen::MatrixXd::Zero(6, 6);
+            kin_tasks_walk.taskLib[id].kd = Eigen::MatrixXd::Zero(6, 6);
+            kin_tasks_walk.taskLib[id].J = Eigen::MatrixXd::Zero(6, model_nv);
+            kin_tasks_walk.taskLib[id].dJ = Eigen::MatrixXd::Zero(6, model_nv);
+        }
         kin_tasks_walk.taskLib[id].W.diagonal() = Eigen::VectorXd::Ones(model_nv);
 
         // task 6: hand track

@@ -181,7 +181,7 @@ void StateEst::getTrustRegion_wt_h()
     double bb[2]{5.0, 5.0};
     for (int i = 0; i < 2; i++)
     {
-        if (legState == DataBus::Stand)
+        if (legState == DataBus::DSt)
             aa[i] = 1.0;
         else
         {

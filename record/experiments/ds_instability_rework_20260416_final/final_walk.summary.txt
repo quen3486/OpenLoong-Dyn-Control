@@ -1,0 +1,1 @@
+final_walk walk=3502 qp_bad=0(0.00%) zmin=0.9927 first95=None first80=None vx_mae=0.0243 roll_rms=0.0193 pitch_rms=0.0113 ds_ratio=0.43%

@@ -130,6 +130,7 @@ struct DataBus
     double width_hips;      // distance between the left and right hip
     double tSwing;
     double phi;
+    double phiSwitchMinRuntime;
     enum MotionState
     {
         Stand,
@@ -151,6 +152,8 @@ struct DataBus
     // for jump
     Eigen::Vector3d base_pos_stand;
     Eigen::Matrix<double, 6, 1> pfeW_stand, pfeW0;
+    int mpcPredictionHorizon;
+    int mpcControlHorizon;
     // Eigen::Vector3d mpc_eul_des, mpc_omega_des, mpc_vel_des, mpc_pos_des;
 
     DataBus(int model_nvIn) : model_nv(model_nvIn)
@@ -175,7 +178,7 @@ struct DataBus
         X_cur = Eigen::VectorXd::Zero(12);
         X_cal = Eigen::VectorXd::Zero(12);
         dX_cal = Eigen::VectorXd::Zero(12);
-        fe_react_tau_cmd = Eigen::VectorXd::Zero(13 * 3);
+        fe_react_tau_cmd = Eigen::VectorXd::Zero(13 * 6);
         qp_nWSR_MPC = 0;
         qp_cpuTime_MPC = 0.0;
         qpStatus_MPC = 0;
@@ -205,6 +208,9 @@ struct DataBus
         width_hips = 0.0;
         tSwing = 0.4;
         phi = 0.0;
+        phiSwitchMinRuntime = 0.6;
+        mpcPredictionHorizon = 10;
+        mpcControlHorizon = 3;
         motionState = Stand;
         base_pos << 0, 0, 0;
         base_vel << 0, 0, 0;

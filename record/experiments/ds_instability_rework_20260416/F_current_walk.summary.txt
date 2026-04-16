@@ -1,0 +1,1 @@
+case=F_current_walk walk_samples=3502 qp_bad=0(0.00%) zmin=-0.7607 first95=3.459 first80=4.453 vx_mae=0.4605 roll_rms=1.1717 pitch_rms=0.6561 ds_ratio=9.28%

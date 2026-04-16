@@ -1,0 +1,2 @@
+walk=8500 bad=0(0.00%) zmin=0.9860 f95=None f80=None vx_mae=0.0294 ds=15.54%
+fail_prints=0

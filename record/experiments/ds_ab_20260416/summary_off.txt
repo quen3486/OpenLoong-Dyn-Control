@@ -1,0 +1,1 @@
+rows=12002 qp_bad=4 vx_mean=0.3613 vx_mae=0.0408 roll_rms_deg=1.1656 pitch_rms_deg=0.6501 phiDS=[0.0000,0.0167] ds_ratio=0.0000

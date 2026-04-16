@@ -2,6 +2,8 @@
 #include <GLFW/glfw3.h>
 #include <cstdio>
 #include <iostream>
+#include <algorithm>
+#include <cmath>
 #include "useful_math.h"
 #include "GLFW_callbacks.h"
 #include "MJ_interface.h"
@@ -12,7 +14,7 @@
 #include "gait_scheduler.h"
 #include "foot_placement.h"
 #include "joystick_interpreter.h"
-#include "gait_profile.h"
+#include "controller_config.h"
 #include "StateEst.h"
 
 // MuJoCo load and compile model
@@ -27,60 +29,71 @@ int main(int argc, const char **argv)
     UIctr uiController(mj_model, mj_data);                                             // UI control for Mujoco
     MJ_Interface mj_interface(mj_model, mj_data);                                      // data interface for Mujoco
     Pin_KinDyn kinDynSolver("../models/AzureLoong.urdf");                              // kinematics and dynamics solver
-    DataBus RobotState(kinDynSolver.model_nv);                                         // data bus
-    WBC_priority WBC_solv(kinDynSolver.model_nv, 18, 22, 0.7, mj_model->opt.timestep); // WBC solver
-    GaitScheduler gaitScheduler(0.4, mj_model->opt.timestep);                          // gait scheduler
-    PVT_Ctr pvtCtr(mj_model->opt.timestep, "../common/joint_ctrl_config.json");        // PVT joint control
-    FootPlacement footPlacement;                                                       // foot-placement planner
-    JoyStickInterpreter jsInterp(mj_model->opt.timestep);                              // desired baselink velocity generator
-    DataLogger logger("../record/datalog.log");                                        // data logger
 
-    GaitProfile gaitProfile;
-    gaitProfile.forwardSpeedDefault = 0.4;
-    gaitProfile.turnRateCmd = 0.35;
-    std::string gaitProfileErr;
-    if (!loadGaitProfile("../common/gait_profile_azure.json", gaitProfile, &gaitProfileErr))
+    ControllerConfig controllerConfig;
+    controllerConfig.forwardSpeedDefault = 0.4;
+    controllerConfig.turnRateCmd = 0.35;
+    std::string controllerConfigErr;
+    if (!loadControllerConfig("../common/controller_config_azure.json", controllerConfig, &controllerConfigErr))
     {
-        std::cerr << "[GaitProfile] fallback to built-in defaults: " << gaitProfileErr << std::endl;
+        std::cerr << "[ControllerConfig] fallback to built-in defaults: " << controllerConfigErr << std::endl;
     }
-    WBC_solv.setContactMiu(gaitProfile.contactMiu);
-    StateEst StateModule(0.001);
+    const double simDt = mj_model->opt.timestep;
+    const int mainCtrlDecimation = std::max(1, static_cast<int>(std::lround(controllerConfig.mainControlDt / simDt)));
+    const double mainCtrlDt = simDt * mainCtrlDecimation;
+    std::cout << "[LoopRate] sim=" << 1.0 / simDt << " Hz, main=" << 1.0 / mainCtrlDt << " Hz" << std::endl;
+
+    DataBus RobotState(kinDynSolver.model_nv);                                         // data bus
+    WBC_priority WBC_solv(kinDynSolver.model_nv, 18, 22, 0.7, mainCtrlDt); // WBC solver
+    GaitScheduler gaitScheduler(0.4, mainCtrlDt);                          // gait scheduler
+    PVT_Ctr pvtCtr(mainCtrlDt, "../common/joint_ctrl_config.json");        // PVT joint control
+    FootPlacement footPlacement;                                                       // foot-placement planner
+    JoyStickInterpreter jsInterp(mainCtrlDt);                              // desired baselink velocity generator
+    DataLogger logger("../record/datalog.log");                                        // data logger
+    WBC_solv.setContactMiu(controllerConfig.contactMiu);
+    StateEst StateModule(mainCtrlDt);
 
     // variables ini
     double stand_legLength = 1.01; // desired baselink height
     double foot_height = 0.07;     // distance between the foot ankel joint and the bottom
-    double xv_des = gaitProfile.forwardSpeedDefault; // desired velocity in x direction
-    const double turnRateCmd = gaitProfile.turnRateCmd;
+    double xv_des = controllerConfig.forwardSpeedDefault; // desired velocity in x direction
+    const double turnRateCmd = controllerConfig.turnRateCmd;
 
-    gaitScheduler.tSwing = gaitProfile.tSwing;
-    gaitScheduler.phiSwitchMin = gaitProfile.phiSwitchMin;
-    gaitScheduler.fzSwitchThreshold = gaitProfile.fzSwitchThreshold;
-    gaitScheduler.fzStopThreshold = gaitProfile.fzStopThreshold;
+    gaitScheduler.tSwing = controllerConfig.tSwing;
+    gaitScheduler.phiSwitchMin = controllerConfig.phiSwitchMin;
+    gaitScheduler.phiSwitchAutoDesign = controllerConfig.phiSwitchAutoDesign;
+    gaitScheduler.phiSwitchDesignRefTSwing = controllerConfig.phiSwitchDesignRefTSwing;
+    gaitScheduler.phiSwitchDesignRef = controllerConfig.phiSwitchDesignRef;
+    gaitScheduler.phiSwitchDesignPower = controllerConfig.phiSwitchDesignPower;
+    gaitScheduler.phiSwitchDesignMin = controllerConfig.phiSwitchDesignMin;
+    gaitScheduler.phiSwitchDesignMax = controllerConfig.phiSwitchDesignMax;
+    gaitScheduler.fzSwitchThreshold = controllerConfig.fzSwitchThreshold;
+    gaitScheduler.fzStopThreshold = controllerConfig.fzStopThreshold;
 
     RobotState.width_hips = 0.229;
-    footPlacement.kp_vx = gaitProfile.kpVx;
-    footPlacement.kp_vy = gaitProfile.kpVy;
-    footPlacement.kp_wz = gaitProfile.kpWz;
-    footPlacement.stepHeight = gaitProfile.stepHeight;
+    footPlacement.kp_vx = controllerConfig.kpVx;
+    footPlacement.kp_vy = controllerConfig.kpVy;
+    footPlacement.kp_wz = controllerConfig.kpWz;
+    footPlacement.stepHeight = controllerConfig.stepHeight;
     footPlacement.legLength = stand_legLength;
-    footPlacement.xOffsetL = gaitProfile.xOffsetL;
-    footPlacement.yOffsetL = gaitProfile.yOffsetL;
-    footPlacement.zOffsetW = gaitProfile.zOffsetW;
-    footPlacement.swingTrajectoryPhase = gaitProfile.swingTrajectoryPhase;
-    footPlacement.swingTrajectoryWindow = gaitProfile.swingTrajectoryWindow;
-    footPlacement.zStretchStartPhi = gaitProfile.zStretchStartPhi;
-    footPlacement.zStretchStep = gaitProfile.zStretchStep;
-    footPlacement.zStretchMin = gaitProfile.zStretchMin;
+    footPlacement.xOffsetL = controllerConfig.xOffsetL;
+    footPlacement.yOffsetL = controllerConfig.yOffsetL;
+    footPlacement.zOffsetW = controllerConfig.zOffsetW;
+    footPlacement.swingTrajectoryPhase = controllerConfig.swingTrajectoryPhase;
+    footPlacement.swingTrajectoryWindow = controllerConfig.swingTrajectoryWindow;
+    footPlacement.zStretchStartPhi = controllerConfig.zStretchStartPhi;
+    footPlacement.zStretchStep = controllerConfig.zStretchStep;
+    footPlacement.zStretchMin = controllerConfig.zStretchMin;
 
-    WBC_solv.cfg_pos_err_clamp_xy = gaitProfile.posErrClampXY;
-    WBC_solv.cfg_pos_err_clamp_z = gaitProfile.posErrClampZ;
-    WBC_solv.cfg_posrot_kp = gaitProfile.posRotKp;
-    WBC_solv.cfg_posrot_kd = gaitProfile.posRotKd;
-    WBC_solv.cfg_posrot_kp_x = gaitProfile.posRotKpX;
-    WBC_solv.cfg_posrot_kp_pitch = gaitProfile.posRotKpPitch;
-    WBC_solv.cfg_posrot_kd_pitch = gaitProfile.posRotKdPitch;
-    WBC_solv.cfg_swing_kp = gaitProfile.swingLegKp;
-    WBC_solv.cfg_swing_kd = gaitProfile.swingLegKd;
+    WBC_solv.cfg_pos_err_clamp_xy = controllerConfig.posErrClampXY;
+    WBC_solv.cfg_pos_err_clamp_z = controllerConfig.posErrClampZ;
+    WBC_solv.cfg_posrot_kp = controllerConfig.posRotKp;
+    WBC_solv.cfg_posrot_kd = controllerConfig.posRotKd;
+    WBC_solv.cfg_posrot_kp_x = controllerConfig.posRotKpX;
+    WBC_solv.cfg_posrot_kp_pitch = controllerConfig.posRotKpPitch;
+    WBC_solv.cfg_posrot_kd_pitch = controllerConfig.posRotKdPitch;
+    WBC_solv.cfg_swing_kp = controllerConfig.swingLegKp;
+    WBC_solv.cfg_swing_kd = controllerConfig.swingLegKd;
     // mju_copy(mj_data->qpos, mj_model->key_qpos, mj_model->nq*1); // set ini pos in Mujoco
     int model_nv = kinDynSolver.model_nv;
 
@@ -131,7 +144,10 @@ int main(int argc, const char **argv)
     logger.addIterm("base_vel_est", 3);
     logger.addIterm("base_rpy", 3);
     logger.addIterm("eul_est", 3);
+    logger.addIterm("mainControlDt", 1);
     logger.finishItermAdding();
+
+    int mainCtrlCount = mainCtrlDecimation - 1;
 
     /// ----------------- sim Loop ---------------
     double simEndTime = 1000;
@@ -163,6 +179,13 @@ int main(int argc, const char **argv)
             mj_interface.updateSensorValues();
             mj_interface.dataBusWrite(RobotState);
 
+            mainCtrlCount++;
+            if (mainCtrlCount < mainCtrlDecimation)
+            {
+                continue;
+            }
+            mainCtrlCount = 0;
+
             if (simTime > 1 && StateModule.flag_init)
             {
                 std::cout << "init state module" << std::endl;
@@ -193,23 +216,23 @@ int main(int argc, const char **argv)
                 if (buttonState.key_a && RobotState.motionState != DataBus::Stand)
                 {
                     if (jsInterp.wzLGen.yDes < 0)
-                        jsInterp.setWzDesLPara(0, gaitProfile.wzStopRampTime);
+                        jsInterp.setWzDesLPara(0, controllerConfig.wzStopRampTime);
                     else
-                        jsInterp.setWzDesLPara(turnRateCmd, gaitProfile.wzRampTime);
+                        jsInterp.setWzDesLPara(turnRateCmd, controllerConfig.wzRampTime);
                 }
                 if (buttonState.key_d && RobotState.motionState != DataBus::Stand)
                 {
                     if (jsInterp.wzLGen.yDes > 0)
-                        jsInterp.setWzDesLPara(0, gaitProfile.wzStopRampTime);
+                        jsInterp.setWzDesLPara(0, controllerConfig.wzStopRampTime);
                     else
-                        jsInterp.setWzDesLPara(-turnRateCmd, gaitProfile.wzRampTime);
+                        jsInterp.setWzDesLPara(-turnRateCmd, controllerConfig.wzRampTime);
                 }
 
                 if (buttonState.key_w && RobotState.motionState != DataBus::Stand)
-                    jsInterp.setVxDesLPara(xv_des, gaitProfile.vxRampTime);
+                    jsInterp.setVxDesLPara(xv_des, controllerConfig.vxRampTime);
 
                 if (buttonState.key_s && RobotState.motionState != DataBus::Stand)
-                    jsInterp.setVxDesLPara(0, gaitProfile.vxStopRampTime);
+                    jsInterp.setVxDesLPara(0, controllerConfig.vxStopRampTime);
 
                 if (buttonState.key_h)
                     jsInterp.setIniPos(RobotState.q(0), RobotState.q(1), RobotState.base_rpy(2));
@@ -378,6 +401,7 @@ int main(int argc, const char **argv)
             logger.recItermData("base_vel_est", RobotState.base_vel_est);
             logger.recItermData("base_rpy", RobotState.base_rpy);
             logger.recItermData("eul_est", RobotState.eul_est);
+            logger.recItermData("mainControlDt", mainCtrlDt);
             logger.finishLine();
 
             // printf("rpyVal=[%.5f, %.5f, %.5f]\n", RobotState.rpy[0], RobotState.rpy[1], RobotState.rpy[2]);

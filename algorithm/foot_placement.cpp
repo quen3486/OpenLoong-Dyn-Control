@@ -36,6 +36,16 @@ void FootPlacement::dataBusWrite(DataBus &robotState)
 }
 void FootPlacement::getSwingPos()
 {
+    if (legState == DataBus::DSt)
+    {
+        // 双支撑阶段不规划摆动腿，保持上一落脚目标，避免无意义的摆腿插值。
+        posDes_W = posStart_W;
+        pDesCur[0] = posStart_W(0);
+        pDesCur[1] = posStart_W(1);
+        pDesCur[2] = posStart_W(2);
+        return;
+    }
+
     Eigen::Matrix<double, 4, 1> b;
     b.setZero();
     Eigen::Matrix<double, 1, 4> xNow;

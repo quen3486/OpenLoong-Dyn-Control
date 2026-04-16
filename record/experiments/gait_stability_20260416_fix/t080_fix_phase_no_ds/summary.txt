@@ -1,0 +1,1 @@
+case=t080_fix_phase_no_ds qp_bad=0(0.00%) ds_ratio=0.00% phiSwitch=[0.350,0.600] first95=6.029 first80=6.411 zmin=-0.4917 zmean=0.7097 roll=0.5717 pitch=0.3855 vx_mae=0.3547

@@ -1,0 +1,1 @@
+case=K_base_walk_no_ds walk_samples=3502 qp_bad=0(0.00%) zmin=0.9614 first95=None first80=None vx_mae=0.1652 roll_rms=0.0327 pitch_rms=0.0229 ds_ratio=0.00%

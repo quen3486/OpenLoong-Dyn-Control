@@ -1,0 +1,85 @@
+{
+  // ===== GaitScheduler：步态相位与换腿触发 =====
+  "t_swing": 0.4,                // 单步摆动时间(s)
+  "phi_switch_min": 0.6,         // 允许换腿的最小相位
+  "phi_switch_auto_design": false, // 是否按 t_swing 自动重算 phi_switch_min
+  "phi_switch_design_ref_t_swing": 0.4, // 参考摆动时间(s)
+  "phi_switch_design_ref": 0.6,  // 参考摆动时间下的最小换腿相位
+  "phi_switch_design_power": 1.0,// 自适应指数，>1 对 t_swing 变化更敏感
+  "phi_switch_design_min": 0.15, // 自动设计下限
+  "phi_switch_design_max": 0.9,  // 自动设计上限
+  "fz_switch_threshold": 280.0,  // 行走中换腿触地力阈值(N)
+  "fz_stop_threshold": 200.0,    // Walk2Stand 进入双支撑触地力阈值(N)
+  "enable_double_support": false,// 是否在行走中启用双支撑过渡相(DSt)
+  "t_double_support": 0.06,      // 双支撑持续时间(s)
+  "phi_ds_enter_min": 0.35,      // 允许进入双支撑的最小单支撑相位
+  "fz_ds_switch_threshold": 180.0, // 进入双支撑的触地力阈值(N)
+  "ds_enable_speed_max": 0.08,   // 仅当|v_des_xy|<=该阈值时启用双支撑（原地/极低速）
+  "main_control_dt": 0.001,      // 主控制链路周期(s)，默认1kHz
+  "mpc_control_dt": 0.005,       // MPC求解周期(s)，默认200Hz
+
+  // ===== FootPlacement：落脚点与摆腿轨迹 =====
+  "foot_kp_vx": 0.03,            // 前后速度反馈增益
+  "foot_kp_vy": 0.03,            // 左右速度反馈增益
+  "foot_kp_wz": 0.03,            // 偏航角速度反馈增益
+  "step_height": 0.12,           // 摆腿抬脚高度(m)
+  "x_offset_l": -0.07,           // 足端x偏置(机体坐标系, 左腿符号基准)
+  "y_offset_l": 0.04,            // 足端y偏置(机体坐标系, 左腿符号基准)
+  "z_offset_w": -0.035,          // 足端z偏置(世界系)
+  "swing_traj_phase": 0.2,       // 摆腿轨迹上升段相位分界
+  "swing_traj_window": 1.4,      // 摆腿Bezier窗口长度(>phase)
+  "z_stretch_start_phi": 0.98,   // 末段压脚开始相位
+  "z_stretch_step": -0.002,      // 每周期压脚增量(m)
+  "z_stretch_min": -0.05,        // 压脚下限(m)
+
+  // ===== JoyStickInterpreter：命令斜坡参数 =====
+  "vx_ramp_time": 2.0,           // 常规加速时间(s)
+  "vx_stop_ramp_time": 0.5,      // 减速/停车时间(s)
+  "wz_ramp_time": 1.0,           // 转向角速度建立时间(s)
+  "wz_stop_ramp_time": 0.5,      // 转向角速度回零时间(s)
+  "speed_update_ramp_time": 0.6, // Q/E调速后的过渡时间(s)
+  "heading_reset_ramp_time": 0.3,// H键航向重置过渡时间(s)
+  "auto_start_ramp_time": 1.0,   // 自动起步速度建立时间(s)
+  "turn_rate_cmd": 0.2,          // 左右转目标角速度(rad/s)
+
+  // ===== Demo速度档位 =====
+  "forward_speed_default": 0.2,  // 默认前进速度(m/s)，先保证低速稳定
+  "speed_step": 0.1,             // 每次调速步进(m/s)
+  "speed_max": 1.2,              // 速度上限(m/s)
+  "speed_min": 0.0,              // 速度下限(m/s)
+
+  // ===== WBC（Walk）关键刚度/限幅 =====
+  "wbc_pos_err_clamp_xy": 0.02,  // PosRot任务x/y误差限幅(m)
+  "wbc_pos_err_clamp_z": 0.005,  // PosRot任务z误差限幅(m)
+  "wbc_posrot_kp": 500.0,        // PosRot通用kp
+  "wbc_posrot_kd": 10.0,         // PosRot通用kd
+  "wbc_posrot_kp_x": 100.0,      // PosRot x向特化kp
+  "wbc_posrot_kp_pitch": 800.0,  // PosRot pitch特化kp
+  "wbc_posrot_kd_pitch": 10.0,   // PosRot pitch特化kd
+  "wbc_swing_kp": 500.0,         // SwingLeg任务kp
+  "wbc_swing_kd": 20.0,          // SwingLeg任务kd
+
+  // ===== 接触摩擦参数（MPC/WBC统一数据源） =====
+  "contact_miu": 0.8,            // 地面摩擦系数（统一用于MPC与WBC摩擦锥）
+
+  // ===== MPC 机体/接触约束参数（与机型强相关） =====
+  "mpc_mass": 59.12,             // speedbot_v4总质量(kg)，来自模型惯量质量和约59.115
+  "mpc_use_databus_inertia": true, // 惯量来源：true=每周期使用Pinocchio写入DataBus.inertia；false=使用下方固定矩阵
+  "mpc_inertia_xx": 12.05,       // 固定惯量回退值 Ixx(kg·m^2)
+  "mpc_inertia_xy": 0.0,         // 固定惯量回退值 Ixy(kg·m^2)
+  "mpc_inertia_xz": 0.37,        // 固定惯量回退值 Ixz(kg·m^2)
+  "mpc_inertia_yy": 9.31,        // 固定惯量回退值 Iyy(kg·m^2)
+  "mpc_inertia_yz": 0.01,        // 固定惯量回退值 Iyz(kg·m^2)
+  "mpc_inertia_zz": 2.89,        // 固定惯量回退值 Izz(kg·m^2)
+  "mpc_delta_foot_front": 0.07,  // 足底支撑域前向半尺寸(m)
+  "mpc_delta_foot_rear": 0.05,   // 足底支撑域后向半尺寸(m)
+  "mpc_delta_foot_left": 0.025,  // 足底支撑域左向半尺寸(m)
+  "mpc_delta_foot_right": 0.025, // 足底支撑域右向半尺寸(m)
+  "mpc_force_max_xy": 1000.0,    // 单脚水平力上限|Fx/Fy|(N)
+  "mpc_fz_max_scale": 3.0,       // 单脚竖直力上限比例：Fz_max = scale * m * |g|
+  "mpc_torque_max_x": 20.0,      // 单脚力矩上限|Mx|(N·m)
+  "mpc_torque_max_y": 80.0,      // 单脚力矩上限|My|(N·m)
+  "mpc_torque_max_z": 100.0,     // 单脚力矩上限|Mz|(N·m)
+  "mpc_prediction_horizon": 20,  // MPC 预测步数 N（1~20）
+  "mpc_control_horizon": 6       // MPC 控制步数 ch（1~10 且 <=N）
+}

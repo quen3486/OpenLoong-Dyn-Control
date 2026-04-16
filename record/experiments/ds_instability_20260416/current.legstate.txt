@@ -1,0 +1,5 @@
+walk_samples=4496
+leg_ratio_L=51.00% R=48.33% DS=0.67%
+longest_run_state=0 len=170 t0=3.695 t1=4.033 dur=0.338
+fail_prints=0
+wsr_errors=0

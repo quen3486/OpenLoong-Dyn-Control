@@ -1,0 +1,1 @@
+case=C_t080 qp_bad=0(0.00%) first95=7.133 first80=7.145 zmin=-0.7479 zmean=0.5783 roll=0.6297 pitch=0.4251 vx_mae=0.2704 step_dx_mean=0.2294 step_dx_abs=0.2685 switches=18
