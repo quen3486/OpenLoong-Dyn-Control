@@ -216,6 +216,16 @@ int main(int argc, char **argv)
     const bool autoWalk = (std::getenv("OPENLOONG_AUTOWALK") != nullptr) &&
                           (std::string(std::getenv("OPENLOONG_AUTOWALK")) == "1");
     bool autoWalkStarted = false;
+    bool autoStopTriggered = false;
+    bool stopToStandPending = false;
+    const double stopTransitionVxThresh = 0.05;
+    const double stopTransitionWzThresh = 0.08;
+    double autoStopTime = -1.0;
+    const char *autoStopEnv = std::getenv("OPENLOONG_AUTOSTOP_TIME");
+    if (autoStopEnv != nullptr)
+    {
+        autoStopTime = std::atof(autoStopEnv);
+    }
     const char *simEndEnv = std::getenv("OPENLOONG_SIM_END");
     if (simEndEnv != nullptr)
     {
@@ -257,10 +267,12 @@ int main(int argc, char **argv)
                     jsInterp.setIniPos(RobotState.q(0), RobotState.q(1), RobotState.base_rpy(2));
                     RobotState.motionState = DataBus::Walk;
                 }
-                else if (buttonState.key_space && RobotState.motionState == DataBus::Walk && fabs(jsInterp.vxLGen.y) < 0.01)
+                else if (buttonState.key_space && RobotState.motionState == DataBus::Walk)
                 {
-                    RobotState.motionState = DataBus::Walk2Stand;
-                    jsInterp.setIniPos(RobotState.q(0), RobotState.q(1), RobotState.base_rpy(2));
+                    // Graceful stop: first ramp speed/yaw-rate to zero, then switch to Walk2Stand.
+                    jsInterp.setVxDesLPara(0.0, controllerConfig.vxStopRampTime);
+                    jsInterp.setWzDesLPara(0.0, controllerConfig.wzStopRampTime);
+                    stopToStandPending = true;
                 }
 
                 if (buttonState.key_a && RobotState.motionState != DataBus::Stand)
@@ -291,11 +303,7 @@ int main(int argc, char **argv)
                 {
                     jsInterp.setVxDesLPara(0, controllerConfig.vxStopRampTime);
                     jsInterp.setWzDesLPara(0, controllerConfig.wzStopRampTime);
-                    if (RobotState.motionState == DataBus::Walk)
-                    {
-                        RobotState.motionState = DataBus::Walk2Stand;
-                        jsInterp.setIniPos(RobotState.q(0), RobotState.q(1), RobotState.base_rpy(2));
-                    }
+                    stopToStandPending = true;
                     std::cout << "[Joystick] J: stop and stand" << std::endl;
                 }
 
@@ -340,6 +348,29 @@ int main(int argc, char **argv)
                     autoWalkStarted = true;
                     std::cout << "[AutoWalk] started with vx_des=" << xv_des << " m/s" << std::endl;
                 }
+                if (autoWalk && autoWalkStarted && !autoStopTriggered && autoStopTime > (openLoopCtrTime + 0.05) &&
+                    simTime >= autoStopTime && RobotState.motionState == DataBus::Walk)
+                {
+                    jsInterp.setVxDesLPara(0.0, controllerConfig.vxStopRampTime);
+                    jsInterp.setWzDesLPara(0.0, controllerConfig.wzStopRampTime);
+                    stopToStandPending = true;
+                    autoStopTriggered = true;
+                    std::cout << "[AutoWalk] auto stop triggered at t=" << simTime << " s" << std::endl;
+                }
+
+                if (stopToStandPending && RobotState.motionState == DataBus::Walk)
+                {
+                    if (std::fabs(jsInterp.vxLGen.y) < stopTransitionVxThresh &&
+                        std::fabs(jsInterp.wzLGen.y) < stopTransitionWzThresh)
+                    {
+                        RobotState.motionState = DataBus::Walk2Stand;
+                        jsInterp.setIniPos(RobotState.q(0), RobotState.q(1), RobotState.base_rpy(2));
+                        stopToStandPending = false;
+                        std::cout << "[Stop2Stand] switch to Walk2Stand at t=" << simTime
+                                  << " s, vxGen=" << jsInterp.vxLGen.y
+                                  << ", wzGen=" << jsInterp.wzLGen.y << std::endl;
+                    }
+                }
             }
 
             StateModule.set(RobotState);
@@ -358,6 +389,7 @@ int main(int argc, char **argv)
             if (simTime >= openLoopCtrTime && simTime < openLoopCtrTime + 0.002)
             {
                 RobotState.motionState = DataBus::Stand;
+                stopToStandPending = false;
             }
 
             if (RobotState.motionState == DataBus::Walk2Stand || simTime <= openLoopCtrTime)

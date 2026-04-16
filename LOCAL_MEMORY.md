@@ -529,3 +529,40 @@
     - `walk_mpc_wbc_v4`（AutoWalk 10s）回归：`qp_bad=0`、`zmin=0.9905`、`first95=None`、`console_wsr=0`。
     - `walk_mpc_wbc_joystick`（AutoWalk 6s）可正常运行退出（无崩溃）。
     - 日志列检查：新 `matlabReadDataScript.txt` 中已无 `phiDS/isDoubleSupport` 字段。
+- 2026-04-16 15:25:42 +0800：
+  - 主题：解释 `N=20/ch=10`“报错多但观感平缓/速度变慢”的原因，并寻找等价平缓方案。
+  - 关键机制确认：
+    - `algorithm/mpc.cpp` 中 QP 失败后 `Ufe` 置零（仅 `qp_Status==0` 才写解），导致 MPC 前馈近似失效；
+    - 系统主要依赖 WBC+PVT 反馈维持，观感会更“钝/慢/平”，但这属于退化运行而非健康优化。
+  - A/B实验（12s, v4, AutoWalk）目录：`record/experiments/equiv_smooth_20260416/`
+    - `c1_n20c10_current`：`qp_bad=8967/8992 (99.72%)`, `console_wsr=1794`，仍可走但实为高失败退化。
+    - `c2_n20c5_same`：`qp_bad=0.11%`，但后段失稳（`zmin=0.6261`，冲击峰值高）。
+    - `c3_n10c3_same`：`qp_bad=0`，稳定。
+    - `c4_equiv_smooth_cfg`（等价平缓候选，`N20/C5` + 长摆动+软落脚+较慢目标速度）：`qp_bad=0`, `zmin=0.9757`, `td_fz_max=210.54`，平缓且稳定。
+    - `c5_n20c10_dt10ms`：`qp_bad=92.33%`（仅降MPC频率不能根治）。
+    - `c6/c7`（`N20/C10` + `u_weight=1e-4/1e-3` 临时改代码验证）仍高失败（约93%）。
+  - 稳态窗口（t>=8s）说明：
+    - `N20/C10` 组稳态速度并不一定更慢（甚至略偏快），用户体感“慢”更多来自退化控制导致的钝化与节拍变化。
+  - 等价优化结论：
+    - 不建议继续依赖 `C=10` 高失败状态换取平缓；
+    - 推荐用“轨迹/接触/目标速度”显式平滑：`N20/C5` + `t_swing≈0.55` + `step_height≈0.08` + `z_stretch_start_phi≈0.90` + `z_stretch_step≈-0.001` + 适度下调 `foot_kp_vx`/`wbc_swing_kp/kd` + 降低默认速度到 `~0.22`。
+- 2026-04-16 17:22:40 +0800：
+  - 主题：用户反馈“当前配置双脚横向过宽，停走后易跪倒”专项排查与修复。
+  - 现象复核：
+    - `record/experiments/width_stop_kneel_20260416/` 里做了基线/调参对比和自动停车复现实验。
+    - 关键触发机制定位：`walk_mpc_wbc_v4` 中 `J`/自动停车路径是“立即切 `Walk2Stand`，再减速”，会在较大前向速度下提前并脚，导致停走后易下蹲/摔倒。
+  - 参数回调（`common/controller_config_v4.json`）：
+    - `phi_switch_min: 0.50 -> 0.55`
+    - `fz_stop_threshold: 180 -> 140`
+    - `foot_kp_vy: 0.022 -> 0.03`
+    - `y_offset_l: 0.025 -> 0.04`
+    - `wbc_pos_err_clamp_z: 0.025 -> 0.01`
+  - 代码修复（`demo/walk_mpc_wbc_v4.cpp`）：
+    - 新增“停车挂起”逻辑：先 `setVxDes(0)/setWzDes(0)`，等待 `|vxGen|<0.05 && |wzGen|<0.08` 再切 `Walk2Stand`。
+    - `Space`（Walk态）与 `J` 都走同一“先减速后并脚”流程。
+    - 新增测试环境变量 `OPENLOONG_AUTOSTOP_TIME`（默认关闭，不影响正常手动控制），用于复现实验中的自动停车触发。
+  - 验证结果：
+    - 自动行走（12s）宽度/平顺指标：`mean_abs_swingFinalY=0.10034`（较之前更收敛），`roll_rms=0.02443`，`pitch_rms=0.01564`，`qp_nonzero=0`。
+    - 自动停车前（旧顺序）存在明显失稳：`post_stop min_base_z=-0.248`，`max_abs_pitch=1.526`。
+    - 应用“先减速后并脚”后同条件复测稳定：`postStop_minZ=0.992844`，`postStop_maxAbsPitch=0.02179`，`postStop_maxAbsRoll=0.04412`。
+    - 日志/控制台关键时序：`t=7.0s` 触发停车请求，`t=7.75s` 在 `vxGen≈0.05` 时切入 `Walk2Stand`，`t>=8.0s` 进入稳定站立。
