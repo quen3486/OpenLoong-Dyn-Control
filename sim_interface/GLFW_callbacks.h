@@ -24,6 +24,7 @@ public:
         bool key_j{false};
         bool key_q{false};
         bool key_e{false};
+        bool key_f{false};
         bool key_space{false};
     } buttonRead;
 
@@ -79,5 +80,4 @@ private:
     mjvScene scn;                       // abstract scene
     mjrContext con;                     // custom GPU context
 };
-
 

@@ -114,6 +114,7 @@ void UIctr::updateScene() {
     buttonRead.key_j=false;
     buttonRead.key_q=false;
     buttonRead.key_e=false;
+    buttonRead.key_f=false;
 
     // get framebuffer viewport
     mjrRect viewport = {0, 0, 0, 0};
@@ -203,6 +204,10 @@ void UIctr::Keyboard(int key, int scancode, int act, int mods)
         buttonRead.key_e= true;
     }
 
+    if (act==GLFW_RELEASE && key==GLFW_KEY_F){
+        buttonRead.key_f= true;
+    }
+
     if (act==GLFW_RELEASE && key==GLFW_KEY_SPACE){
         buttonRead.key_space= true;
     }
@@ -288,6 +293,7 @@ UIctr::ButtonState UIctr::getButtonState() {
     buttonRead.key_j= false;
     buttonRead.key_q= false;
     buttonRead.key_e= false;
+    buttonRead.key_f= false;
     buttonRead.key_space= false;
     return tmp;
 }

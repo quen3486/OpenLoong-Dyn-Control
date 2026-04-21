@@ -5,6 +5,7 @@
 #include <GLFW/glfw3.h>
 #include "GLFW_callbacks.h"
 #include "MJ_interface_v4.h"
+#include "ROS2_state_pub_v4.h"
 #include "PVT_ctrl_v4.h"
 #include "data_logger.h"
 #include "data_bus.h"
@@ -20,8 +21,97 @@
 #include <iostream>
 #include <algorithm>
 #include <cmath>
+#include <cctype>
 #include <cstdlib>
 #include "StateEst.h"
+
+namespace
+{
+const char *getEnvEither(const char *keyPrimary, const char *keyCompat = nullptr)
+{
+    if (keyPrimary != nullptr)
+    {
+        if (const char *v = std::getenv(keyPrimary); v != nullptr)
+        {
+            return v;
+        }
+    }
+    if (keyCompat != nullptr)
+    {
+        return std::getenv(keyCompat);
+    }
+    return nullptr;
+}
+
+std::string toLowerCopy(std::string in)
+{
+    for (char &ch : in)
+    {
+        ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+    }
+    return in;
+}
+
+bool parseBoolEnv(const char *envValue, bool &outValue)
+{
+    if (envValue == nullptr)
+    {
+        return false;
+    }
+    std::string v = toLowerCopy(std::string(envValue));
+    if (v == "1" || v == "true" || v == "yes" || v == "on")
+    {
+        outValue = true;
+        return true;
+    }
+    if (v == "0" || v == "false" || v == "no" || v == "off")
+    {
+        outValue = false;
+        return true;
+    }
+    return false;
+}
+
+void applyControllerEnvOverrides(ControllerConfig &cfg)
+{
+    if (const char *modeEnv = getEnvEither("CONTROL_MODE", "OPENLOONG_CONTROL_MODE"); modeEnv != nullptr)
+    {
+        const std::string mode = toLowerCopy(std::string(modeEnv));
+        if (mode == "mujoco")
+        {
+            cfg.controlBackend = "mujoco";
+            cfg.simEnableRos2StatePub = false;
+        }
+        else if (mode == "mujoco_ros2")
+        {
+            cfg.controlBackend = "mujoco";
+            cfg.simEnableRos2StatePub = true;
+        }
+        else if (mode == "ros2_real")
+        {
+            cfg.controlBackend = "mujoco";
+            cfg.simEnableRos2StatePub = false;
+            std::cerr << "[Backend] ros2_real is not implemented for walk_mpc_wbc_v4, fallback to mujoco." << std::endl;
+        }
+    }
+
+    bool boolTmp = false;
+    if (parseBoolEnv(getEnvEither("SIM_ENABLE_ROS2_STATE_PUB", "OPENLOONG_SIM_ENABLE_ROS2_STATE_PUB"), boolTmp))
+    {
+        cfg.simEnableRos2StatePub = boolTmp;
+    }
+
+    if (const char *simPubDtEnv = getEnvEither("SIM_ROS_PUBLISH_DT", "OPENLOONG_SIM_ROS_PUBLISH_DT"); simPubDtEnv != nullptr)
+    {
+        char *endPtr = nullptr;
+        const double v = std::strtod(simPubDtEnv, &endPtr);
+        if (endPtr != simPubDtEnv)
+        {
+            cfg.simRosPublishDt = std::clamp(v, 1e-3, 0.1);
+        }
+    }
+}
+} // namespace
 
 char error[1000] = "Could not load binary model";
 mjModel *mj_model = mj_loadXML("../models/scene_v4.xml", 0, error, 1000);
@@ -40,11 +130,17 @@ int main(int argc, char **argv)
     controllerConfig.speedMax = 1.2;
     controllerConfig.speedMin = 0.0;
     controllerConfig.turnRateCmd = 0.2;
+    const char *cfgEnv = std::getenv("OPENLOONG_CONTROLLER_CONFIG");
+    const std::string cfgPath = (cfgEnv != nullptr && std::string(cfgEnv).size() > 0)
+                                    ? std::string(cfgEnv)
+                                    : std::string("../common/controller_config_v4.json");
+    std::cout << "[ControllerConfig] loading: " << cfgPath << std::endl;
     std::string controllerConfigErr;
-    if (!loadControllerConfig("../common/controller_config_v4.json", controllerConfig, &controllerConfigErr))
+    if (!loadControllerConfig(cfgPath, controllerConfig, &controllerConfigErr))
     {
         std::cerr << "[ControllerConfig] fallback to built-in defaults: " << controllerConfigErr << std::endl;
     }
+    applyControllerEnvOverrides(controllerConfig);
     const double simDt = mj_model->opt.timestep;
     const int mainCtrlDecimation = std::max(1, static_cast<int>(std::lround(controllerConfig.mainControlDt / simDt)));
     const double mainCtrlDt = simDt * mainCtrlDecimation;
@@ -62,6 +158,7 @@ int main(int argc, char **argv)
     JoyStickInterpreter jsInterp(mainCtrlDt);
     DataLogger logger("../record/datalog.log");
     StateEst StateModule(mainCtrlDt);
+    ROS2_StatePub_V4 simRos2StatePub;
     Eigen::Matrix3d mpcInertiaCfg;
     mpcInertiaCfg << controllerConfig.mpcInertiaXx, controllerConfig.mpcInertiaXy, controllerConfig.mpcInertiaXz,
                      controllerConfig.mpcInertiaXy, controllerConfig.mpcInertiaYy, controllerConfig.mpcInertiaYz,
@@ -80,11 +177,31 @@ int main(int argc, char **argv)
     MPC_solv.setHorizon(controllerConfig.mpcPredictionHorizon, controllerConfig.mpcControlHorizon);
     WBC_solv.setContactMiu(controllerConfig.contactMiu);
 
+    bool simRos2StatePubEnabled = controllerConfig.simEnableRos2StatePub;
+    int simRos2PubCount = 0;
+    int simRos2PubDecimation = std::max(1, static_cast<int>(std::lround(controllerConfig.simRosPublishDt / simDt)));
+    if (simRos2StatePubEnabled)
+    {
+        std::string simRosErr;
+        if (!simRos2StatePub.initialize(controllerConfig, &simRosErr))
+        {
+            std::cerr << "[ROS2-Sim] initialization failed: " << simRosErr << std::endl;
+            simRos2StatePubEnabled = false;
+        }
+        else
+        {
+            std::cout << "[ROS2-Sim] enabled, publish_dt=" << simRos2PubDecimation * simDt
+                      << " s, imu_topic=" << controllerConfig.rosTopicImu
+                      << ", joint_topic=" << controllerConfig.rosTopicJointStates << std::endl;
+        }
+    }
+
     // initialize UI: GLFW
     uiController.iniGLFW();
     uiController.enableTracking();
     uiController.createWindow("Demo_V4", false);
     UIctr::ButtonState buttonState;
+    std::cout << "[OpenLoop] press F to enable closed-loop walk control." << std::endl;
 
     // initialize variables
     // speedbot_v4: leg length ~0.983m, use 0.95 for slight bend; foot height ~0.053m     
@@ -209,12 +326,10 @@ int main(int argc, char **argv)
     int mainCtrlCount = mainCtrlDecimation - 1;
     int mpcCtrlCount = mpcCtrlDecimation - 1;
 
-    double openLoopCtrTime = 3;
-    double startSteppingTime = 7;
-    double startWalkingTime = 10;
+    bool openLoopPhaseActive = true;
     double simEndTime = 200;
-    const bool autoWalk = (std::getenv("OPENLOONG_AUTOWALK") != nullptr) &&
-                          (std::string(std::getenv("OPENLOONG_AUTOWALK")) == "1");
+    const char *autoWalkEnv = std::getenv("AUTOWALK");
+    const bool autoWalk = (autoWalkEnv != nullptr) && (std::string(autoWalkEnv) == "1");
     bool autoWalkStarted = false;
     bool autoStopTriggered = false;
     bool stopToStandPending = false;
@@ -244,6 +359,16 @@ int main(int argc, char **argv)
             simTime = mj_data->time;
             mj_interface.updateSensorValues();
             mj_interface.dataBusWrite(RobotState);
+            if (simRos2StatePubEnabled)
+            {
+                simRos2PubCount++;
+                if (simRos2PubCount >= simRos2PubDecimation)
+                {
+                    simRos2StatePub.publishState(RobotState);
+                    simRos2StatePub.spinSome();
+                    simRos2PubCount = 0;
+                }
+            }
 
             mainCtrlCount++;
             if (mainCtrlCount < mainCtrlDecimation)
@@ -259,7 +384,18 @@ int main(int argc, char **argv)
             }
 
             buttonState = uiController.getButtonState();
-            if (simTime > openLoopCtrTime)
+            if (buttonState.key_f && openLoopPhaseActive)
+            {
+                openLoopPhaseActive = false;
+                stopToStandPending = false;
+                RobotState.motionState = DataBus::Stand;
+                jsInterp.setIniPos(RobotState.q(0), RobotState.q(1), RobotState.base_rpy(2));
+                jsInterp.setVxDesLPara(0.0, controllerConfig.vxStopRampTime);
+                jsInterp.setVyDesLPara(0.0, controllerConfig.vxStopRampTime);
+                jsInterp.setWzDesLPara(0.0, controllerConfig.wzStopRampTime);
+                std::cout << "[OpenLoop] closed-loop enabled at t=" << simTime << " s" << std::endl;
+            }
+            if (!openLoopPhaseActive)
             {
                 if (buttonState.key_space && RobotState.motionState == DataBus::Stand)
                 {
@@ -277,7 +413,7 @@ int main(int argc, char **argv)
 
                 if (buttonState.key_a && RobotState.motionState != DataBus::Stand)
                 {
-                        if (jsInterp.wzLGen.yDes < 0)
+                    if (jsInterp.wzLGen.yDes < 0)
                         jsInterp.setWzDesLPara(0, controllerConfig.wzStopRampTime);
                     else
                         jsInterp.setWzDesLPara(turnRateCmd, controllerConfig.wzRampTime);
@@ -338,8 +474,7 @@ int main(int argc, char **argv)
                     std::cout << "[Joystick] H: reset heading reference" << std::endl;
                 }
 
-                if (autoWalk && !autoWalkStarted && simTime > (openLoopCtrTime + 0.01) &&
-                    RobotState.motionState == DataBus::Stand)
+                if (autoWalk && !autoWalkStarted && RobotState.motionState == DataBus::Stand)
                 {
                     gaitScheduler.start();
                     jsInterp.setIniPos(RobotState.q(0), RobotState.q(1), RobotState.base_rpy(2));
@@ -348,7 +483,7 @@ int main(int argc, char **argv)
                     autoWalkStarted = true;
                     std::cout << "[AutoWalk] started with vx_des=" << xv_des << " m/s" << std::endl;
                 }
-                if (autoWalk && autoWalkStarted && !autoStopTriggered && autoStopTime > (openLoopCtrTime + 0.05) &&
+                if (autoWalk && autoWalkStarted && !autoStopTriggered && autoStopTime > 0.0 &&
                     simTime >= autoStopTime && RobotState.motionState == DataBus::Walk)
                 {
                     jsInterp.setVxDesLPara(0.0, controllerConfig.vxStopRampTime);
@@ -386,13 +521,16 @@ int main(int argc, char **argv)
             StateModule.updateF();
             StateModule.getF(RobotState);
 
-            if (simTime >= openLoopCtrTime && simTime < openLoopCtrTime + 0.002)
+            if (openLoopPhaseActive)
             {
                 RobotState.motionState = DataBus::Stand;
                 stopToStandPending = false;
+                jsInterp.setVxDesLPara(0.0, controllerConfig.vxStopRampTime);
+                jsInterp.setVyDesLPara(0.0, controllerConfig.vxStopRampTime);
+                jsInterp.setWzDesLPara(0.0, controllerConfig.wzStopRampTime);
             }
 
-            if (RobotState.motionState == DataBus::Walk2Stand || simTime <= openLoopCtrTime)
+            if (RobotState.motionState == DataBus::Walk2Stand || openLoopPhaseActive)
                 jsInterp.setIniPos(RobotState.q(0), RobotState.q(1), RobotState.base_rpy(2));
 
             if (RobotState.motionState == DataBus::Walk || RobotState.motionState == DataBus::Walk2Stand)
@@ -415,7 +553,7 @@ int main(int argc, char **argv)
                 MPC_solv.disable();
             }
 
-            if (simTime <= openLoopCtrTime || RobotState.motionState == DataBus::Walk2Stand)
+            if (openLoopPhaseActive || RobotState.motionState == DataBus::Walk2Stand)
             {
                 WBC_solv.setQini(qIniDes, RobotState.q);
                 WBC_solv.fe_l_pos_des_W = RobotState.fe_l_pos_W;
@@ -456,7 +594,7 @@ int main(int argc, char **argv)
             WBC_solv.dataBusWrite(RobotState);
 
             // joint command
-            if (simTime <= openLoopCtrTime)
+            if (openLoopPhaseActive)
             {
                 Eigen::VectorXd temp = resLeg.jointPosRes;
                 // arm_l at fixed indices 12-16, arm_r at fixed indices 17-21
@@ -489,7 +627,7 @@ int main(int argc, char **argv)
 
             // joint PVT controller
             pvtCtr.dataBusRead(RobotState);
-            if (simTime <= openLoopCtrTime)
+            if (openLoopPhaseActive)
             {
                 pvtCtr.calMotorsPVT(110.0 / 1000.0 / 180.0 * 3.1415);
             }

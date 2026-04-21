@@ -79,6 +79,7 @@ int main(int argc, char **argv)
     uiController.enableTracking();            // enable viewpoint tracking of the body 1 of the robot
     uiController.createWindow("Demo", false); // NOTE: if the saveVideo is set to true, the raw recorded file could be 2.5 GB for 15 seconds!
     UIctr::ButtonState buttonState;
+    std::cout << "[OpenLoop] press F to enable closed-loop walk control." << std::endl;
 
     // initialize variables
     double stand_legLength = 1.01; //-0.95; // desired baselink height
@@ -196,9 +197,7 @@ int main(int argc, char **argv)
     int mainCtrlCount = mainCtrlDecimation - 1;
     int mpcCtrlCount = mpcCtrlDecimation - 1;
 
-    double openLoopCtrTime = 3;
-    double startSteppingTime = 7;
-    double startWalkingTime = 10;
+    bool openLoopPhaseActive = true;
     double simEndTime = 200;
 
     mjtNum simstart = mj_data->time;
@@ -229,17 +228,28 @@ int main(int argc, char **argv)
             }
 
             // input from joystick
-            // space: start and stop stepping (after 3s)
+            // F: exit open-loop stage
+            // space: start and stop stepping
             // w: forward walking
             // s: stop forward walking
             // a: turning left
             // d: turning right
             buttonState = uiController.getButtonState();
-            if (simTime > openLoopCtrTime)
+            if (buttonState.key_f && openLoopPhaseActive)
+            {
+                openLoopPhaseActive = false;
+                RobotState.motionState = DataBus::Stand;
+                jsInterp.setIniPos(RobotState.q(0), RobotState.q(1), RobotState.base_rpy(2));
+                jsInterp.setVxDesLPara(0.0, controllerConfig.vxStopRampTime);
+                jsInterp.setVyDesLPara(0.0, controllerConfig.vxStopRampTime);
+                jsInterp.setWzDesLPara(0.0, controllerConfig.wzStopRampTime);
+                std::cout << "[OpenLoop] closed-loop enabled at t=" << simTime << " s" << std::endl;
+            }
+            if (!openLoopPhaseActive)
             {
                 if (buttonState.key_space && RobotState.motionState == DataBus::Stand)
                 {
-					gaitScheduler.start();
+                    gaitScheduler.start();
                     jsInterp.setIniPos(RobotState.q(0), RobotState.q(1), RobotState.base_rpy(2));
                     RobotState.motionState = DataBus::Walk;
                 }
@@ -289,12 +299,15 @@ int main(int argc, char **argv)
             StateModule.updateF();
             StateModule.getF(RobotState);
 
-            if (simTime >= openLoopCtrTime && simTime < openLoopCtrTime + 0.002)
+            if (openLoopPhaseActive)
             {
                 RobotState.motionState = DataBus::Stand;
+                jsInterp.setVxDesLPara(0.0, controllerConfig.vxStopRampTime);
+                jsInterp.setVyDesLPara(0.0, controllerConfig.vxStopRampTime);
+                jsInterp.setWzDesLPara(0.0, controllerConfig.wzStopRampTime);
             }
 
-            if (RobotState.motionState == DataBus::Walk2Stand || simTime <= openLoopCtrTime)
+            if (RobotState.motionState == DataBus::Walk2Stand || openLoopPhaseActive)
                 jsInterp.setIniPos(RobotState.q(0), RobotState.q(1), RobotState.base_rpy(2));
 
             // switch between walk and stand
@@ -319,7 +332,7 @@ int main(int argc, char **argv)
 				MPC_solv.disable();
 			}
 
-            if (simTime <= openLoopCtrTime || RobotState.motionState == DataBus::Walk2Stand)
+            if (openLoopPhaseActive || RobotState.motionState == DataBus::Walk2Stand)
             {
                 WBC_solv.setQini(qIniDes, RobotState.q);
                 WBC_solv.fe_l_pos_des_W = RobotState.fe_l_pos_W;
@@ -364,7 +377,7 @@ int main(int argc, char **argv)
             WBC_solv.dataBusWrite(RobotState);
 
             // get the final joint command
-            if (simTime <= openLoopCtrTime)
+            if (openLoopPhaseActive)
             {
                 Eigen::VectorXd temp = resLeg.jointPosRes;
                 temp.block(0, 0, 7, 1) = hd_l_des;
@@ -396,7 +409,7 @@ int main(int argc, char **argv)
 
             // joint PVT controller
             pvtCtr.dataBusRead(RobotState);
-            if (simTime <= openLoopCtrTime)
+            if (openLoopPhaseActive)
             {
                 pvtCtr.calMotorsPVT(110.0 / 1000.0 / 180.0 * 3.1415);
             }

@@ -1,0 +1,92 @@
+# speedbot_v4_leg 站立假数据模板（来自 MuJoCo ros2 仿真实测采样）
+# 采样方式：
+#   CONTROL_MODE=mujoco_ros2 AUTOWALK=0 ./walk_mpc_wbc_leg
+#   ros2 topic echo /imu/data --once
+#   ros2 topic echo /joint_states --once
+#
+# 用途：
+# - 给 ros2_real 控制链路喂“非全零”反馈，验证控制流程与话题格式
+# - 避免全零 IMU/关节状态导致状态估计与QP在初始化阶段异常
+
+meta:
+  robot_variant: speedbot_v4_leg
+  source: mujoco_ros2_sample
+  sample_time_local: "2026-04-21"
+  notes:
+    - "joint_states 名称与数组长度必须一致（12）"
+    - "imu 四元数不要全零，建议保持单位四元数附近"
+    - "若要验证步态切换，joint effort 建议提供非零合理值"
+
+ros_topics:
+  imu: /imu/data
+  joint_states: /joint_states
+  action_cmd: /rl_motion_control_command
+
+imu_msg:
+  orientation:
+    x: 8.631939622237424e-07
+    y: -0.009664963292193473
+    z: -3.6729026509157227e-07
+    w: 0.9999532931510753
+  angular_velocity:
+    x: 5.694989256834325e-07
+    y: -0.00467924785662142
+    z: 1.0810321380454881e-07
+  linear_acceleration:
+    x: 0.1994482807860512
+    y: 2.1553771100567508e-05
+    z: 9.80845897406052
+
+joint_states_msg:
+  name:
+    - left_hip_roll_joint
+    - left_hip_yaw_joint
+    - left_hip_pitch_joint
+    - left_ankle_roll_joint
+    - left_ankle_pitch_joint
+    - right_hip_yaw_joint
+    - left_knee_joint
+    - right_knee_joint
+    - right_hip_roll_joint
+    - right_ankle_pitch_joint
+    - right_hip_pitch_joint
+    - right_ankle_roll_joint
+  position:
+    - 0.03031403553910733
+    - -0.00016003872538978647
+    - -0.26628674294850857
+    - 0.034067204436903656
+    - 0.27314297323570763
+    - 0.00016020340877655792
+    - -0.5574970932582791
+    - -0.5574998496788529
+    - -0.030314061636763423
+    - 0.2731451729686945
+    - -0.2662872742777623
+    - -0.034064833029552356
+  velocity:
+    - 0.0035075306445905537
+    - -0.00010110231925785538
+    - -5.0139681778377286e-05
+    - 0.002026245814921094
+    - 0.00035392747608372315
+    - 0.00010094653337483064
+    - 0.00011179765808269546
+    - 0.0001118724694206956
+    - -0.003507559132705459
+    - 0.0003535291547124469
+    - -5.0452685604919683e-05
+    - -0.0020263983826610495
+  effort:
+    - 18.565458915357034
+    - 0.2030965478722482
+    - -3.6970965543560013
+    - 3.3177464194894917
+    - 1.6561640422500912
+    - -0.2032769696469039
+    - 28.980012427532976
+    - 28.985511774379674
+    - -18.565401996382494
+    - 1.6540246998941563
+    - -3.695976488185629
+    - -3.3191548799867143

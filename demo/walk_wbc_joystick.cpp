@@ -153,15 +153,14 @@ int main(int argc, const char **argv)
     double simEndTime = 1000;
     mjtNum simstart = mj_data->time;
     double simTime = mj_data->time;
-    double openLoopCtrTime = 3;
-    double startSteppingTime = 7;
-    double startWalkingTime = 10;
+    bool openLoopPhaseActive = true;
 
     // init UI: GLFW
     uiController.iniGLFW();
     uiController.enableTracking(); // enable viewpoint tracking of the body 1 of the robot
     uiController.createWindow("Demo", false);
     UIctr::ButtonState buttonState;
+    std::cout << "[OpenLoop] press F to enable closed-loop walk control." << std::endl;
 
     while (!glfwWindowShouldClose(uiController.window))
     {
@@ -193,17 +192,28 @@ int main(int argc, const char **argv)
             }
 
             // input from joystick
-            // space: start and stop stepping (after 3s)
+            // F: exit open-loop stage
+            // space: start and stop stepping
             // w: forward walking
             // s: stop forward walking
             // a: turning left
             // d: turning right
             buttonState = uiController.getButtonState();
-            if (simTime > openLoopCtrTime)
+            if (buttonState.key_f && openLoopPhaseActive)
+            {
+                openLoopPhaseActive = false;
+                RobotState.motionState = DataBus::Stand;
+                jsInterp.setIniPos(RobotState.q(0), RobotState.q(1), RobotState.base_rpy(2));
+                jsInterp.setVxDesLPara(0.0, controllerConfig.vxStopRampTime);
+                jsInterp.setVyDesLPara(0.0, controllerConfig.vxStopRampTime);
+                jsInterp.setWzDesLPara(0.0, controllerConfig.wzStopRampTime);
+                std::cout << "[OpenLoop] closed-loop enabled at t=" << simTime << " s" << std::endl;
+            }
+            if (!openLoopPhaseActive)
             {
                 if (buttonState.key_space && RobotState.motionState == DataBus::Stand)
                 {
-					gaitScheduler.start();
+                    gaitScheduler.start();
                     jsInterp.setIniPos(RobotState.q(0), RobotState.q(1), RobotState.base_rpy(2));
                     RobotState.motionState = DataBus::Walk;
                 }
@@ -253,12 +263,15 @@ int main(int argc, const char **argv)
             StateModule.updateF();
             StateModule.getF(RobotState);
 
-            if (simTime >= openLoopCtrTime && simTime < openLoopCtrTime + 0.002)
+            if (openLoopPhaseActive)
             {
                 RobotState.motionState = DataBus::Stand;
+                jsInterp.setVxDesLPara(0.0, controllerConfig.vxStopRampTime);
+                jsInterp.setVyDesLPara(0.0, controllerConfig.vxStopRampTime);
+                jsInterp.setWzDesLPara(0.0, controllerConfig.wzStopRampTime);
             }
 
-            if (RobotState.motionState == DataBus::Walk2Stand || simTime <= openLoopCtrTime)
+            if (RobotState.motionState == DataBus::Walk2Stand || openLoopPhaseActive)
                 jsInterp.setIniPos(RobotState.q(0), RobotState.q(1), RobotState.base_rpy(2));
 
             // switch between walk and stand
@@ -268,8 +281,6 @@ int main(int argc, const char **argv)
                 RobotState.js_pos_des(2) = stand_legLength + foot_height; // pos z is not assigned in jyInterp
                 jsInterp.dataBusWrite(RobotState);                        // only pos x, pos y, theta z, vel x, vel y , omega z are rewrote.
 
-                //                if (simTime <startSteppingTime+0.002)
-                //                    RobotState.motionState=DataBus::Walk;
                 // gait scheduler
                 gaitScheduler.dataBusRead(RobotState);
                 gaitScheduler.step();
@@ -280,7 +291,7 @@ int main(int argc, const char **argv)
                 footPlacement.dataBusWrite(RobotState);
             }
 
-            if (simTime <= openLoopCtrTime || RobotState.motionState == DataBus::Walk2Stand)
+            if (openLoopPhaseActive || RobotState.motionState == DataBus::Walk2Stand)
             {
                 WBC_solv.setQini(qIniDes, RobotState.q);
                 WBC_solv.fe_l_pos_des_W = RobotState.fe_l_pos_W;
@@ -335,7 +346,7 @@ int main(int argc, const char **argv)
             WBC_solv.dataBusWrite(RobotState);
 
             // get the final joint command
-            if (simTime <= openLoopCtrTime)
+            if (openLoopPhaseActive)
             {
                 Eigen::VectorXd temp = resLeg.jointPosRes;
                 temp.block(0, 0, 7, 1) = hd_l_des;
@@ -353,7 +364,7 @@ int main(int argc, const char **argv)
             }
 
             pvtCtr.dataBusRead(RobotState);
-            if (simTime <= openLoopCtrTime)
+            if (openLoopPhaseActive)
             {
                 pvtCtr.calMotorsPVT(100.0 / 1000.0 / 180.0 * 3.1415);
             }

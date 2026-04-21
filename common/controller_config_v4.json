@@ -1,7 +1,13 @@
 {
+  // ===== ROS2接口（仿真发布/可视化） =====
+  "sim_enable_ros2_state_pub": false,      // MuJoCo是否发布ROS2状态（mujoco_ros2模式会被环境变量置true）
+  "sim_ros_publish_dt": 0.01,              // 仿真ROS2状态发布周期(s)
+  "ros_topic_imu": "/imu/data",            // IMU姿态话题
+  "ros_topic_joint_states": "/joint_states", // 关节状态话题
+
   // ===== 控制循环频率 =====
-  "main_control_dt": 0.002,      // 主控制链路周期(s)，当前500Hz
-  "mpc_control_dt": 0.01,        // MPC求解周期(s)，当前100Hz
+  "main_control_dt": 0.001,      // 主控制链路周期(s)，当前500Hz
+  "mpc_control_dt": 0.02,        // MPC求解周期(s)，当前100Hz
 
   // ===== 步态调度（GaitScheduler） =====
   "t_swing": 0.4,                // 单步摆动时间(s)
@@ -26,7 +32,7 @@
   "swing_traj_phase": 0.2,       // 摆腿轨迹上升段相位分界
   "swing_traj_window": 1.4,      // 摆腿Bezier窗口长度(>phase)
   "z_stretch_start_phi": 0.98,   // 末段压脚开始相位
-  "z_stretch_step": -0.002,      // 每周期压脚增量(m)
+  "z_stretch_step": -0.005,      // 每周期压脚增量(m)
   "z_stretch_min": -0.05,        // 压脚下限(m)
 
   // ===== 命令整形（JoyStickInterpreter） =====

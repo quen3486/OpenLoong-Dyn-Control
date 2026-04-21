@@ -11,4 +11,6 @@ build/
 
 record/
 
+ref/
+
 *.out

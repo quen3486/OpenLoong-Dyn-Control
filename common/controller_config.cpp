@@ -37,6 +37,15 @@ void readOptionalInt(const Json::Value &root, const char *key, int &target)
         target = root[key].asInt();
     }
 }
+
+void readOptionalString(const Json::Value &root, const char *key, std::string &target)
+{
+    if (root.isMember(key) && root[key].isString())
+    {
+        target = root[key].asString();
+    }
+}
+
 } // namespace
 
 bool loadControllerConfig(const std::string &jsonPath, ControllerConfig &outProfile, std::string *errMsg)
@@ -65,6 +74,13 @@ bool loadControllerConfig(const std::string &jsonPath, ControllerConfig &outProf
         }
         return false;
     }
+
+    readOptionalBool(root, "sim_enable_ros2_state_pub", outProfile.simEnableRos2StatePub);
+    readOptionalDouble(root, "sim_ros_publish_dt", outProfile.simRosPublishDt);
+    readOptionalString(root, "ros_topic_imu", outProfile.rosTopicImu);
+    readOptionalString(root, "ros_topic_joint_states", outProfile.rosTopicJointStates);
+    readOptionalString(root, "ros_topic_action_cmd", outProfile.rosTopicActionCmd);
+    readOptionalDouble(root, "ros_data_timeout_sec", outProfile.rosDataTimeoutSec);
 
     readOptionalDouble(root, "main_control_dt", outProfile.mainControlDt);
     readOptionalDouble(root, "mpc_control_dt", outProfile.mpcControlDt);
@@ -137,6 +153,9 @@ bool loadControllerConfig(const std::string &jsonPath, ControllerConfig &outProf
     readOptionalDouble(root, "mpc_inertia_zz", outProfile.mpcInertiaZz);
 
     // Basic safety clamping
+    outProfile.simRosPublishDt = std::clamp(outProfile.simRosPublishDt, 1e-3, 0.1);
+    outProfile.rosDataTimeoutSec = std::clamp(outProfile.rosDataTimeoutSec, 0.01, 2.0);
+
     outProfile.tSwing = std::max(outProfile.tSwing, 0.05);
     outProfile.phiSwitchMin = std::clamp(outProfile.phiSwitchMin, 0.0, 0.99);
     outProfile.phiSwitchDesignRefTSwing = std::max(outProfile.phiSwitchDesignRefTSwing, 0.05);

@@ -566,3 +566,474 @@
     - 自动停车前（旧顺序）存在明显失稳：`post_stop min_base_z=-0.248`，`max_abs_pitch=1.526`。
     - 应用“先减速后并脚”后同条件复测稳定：`postStop_minZ=0.992844`，`postStop_maxAbsPitch=0.02179`，`postStop_maxAbsRoll=0.04412`。
     - 日志/控制台关键时序：`t=7.0s` 触发停车请求，`t=7.75s` 在 `vxGen≈0.05` 时切入 `Walk2Stand`，`t>=8.0s` 进入稳定站立。
+- 2026-04-17 17:41:28 +0800：
+  - 主题：用户确认“真机 ROS2 控制迁移方案”，要求先冻结方案并记录到本地记忆，再开始代码实现。
+  - 本轮确认后的约束（最新）：
+    - 仅真机控制模式启用 RViz 可视化；MuJoCo 仿真模式不启用 RViz。
+    - RViz 话题与真机驱动保持一致，核心对齐：`/imu/data`（姿态）与机器人动作相关话题（`/joint_states`、`/rl_motion_control_command`）。
+    - 继续使用原有 walk demo 作为程序入口（不新增新的主入口可执行），通过配置文件切换 `mujoco` / `ros2_real`。
+  - 冻结的实施方案（待执行）：
+    1) 配置层扩展（`common/controller_config.h/.cpp` + `common/controller_config_v4_leg.json`）
+       - 新增后端选择：`control_backend = mujoco | ros2_real`
+       - 新增真机话题配置：`ros_topic_imu`, `ros_topic_joint_states`, `ros_topic_action_cmd`
+       - 新增真机控制输入：`ros_topic_cmd_vel`, `ros_topic_walk_enable`
+       - 新增超时保护：`ros_data_timeout_sec`
+       - 新增 RViz 开关：`real_enable_rviz`（仅真机模式生效）
+    2) 新增真机接口模块（`sim_interface/ROS2_interface_v4_leg.h/.cpp`）
+       - 订阅 `/imu/data`、`/joint_states`，写入 DataBus 关键状态。
+       - 发布 `/rl_motion_control_command`，按真机驱动格式输出 12 腿关节目标 + 17 上肢零值。
+       - 关节顺序采用“按 name 映射”，避免消息顺序依赖。
+    3) 入口统一改造（`demo/walk_mpc_wbc_leg.cpp`）
+       - 保留同一入口 `walk_mpc_wbc_leg`。
+       - `mujoco` 分支：保持现有 MuJoCo + GLFW 流程。
+       - `ros2_real` 分支：固定控制周期循环（无 MuJoCo/GLFW），输入走 ROS2，输出走 ROS2。
+       - 结构上将 MuJoCo 顶层静态初始化改为按后端延迟初始化，避免真机模式误加载 XML。
+    4) RViz（仅真机）
+       - 提供 RViz 配置和启动说明（或 launch），订阅真机同话题进行姿态/动作可视化。
+       - MuJoCo 模式不启动 RViz，不额外桥接仿真话题。
+    5) 构建策略（`CMakeLists.txt`）
+       - ROS2 依赖按可选检测接入（存在则编译真实接口，不存在仍可编译仿真模式）。
+       - 运行时若配置 `ros2_real` 但无 ROS2 支持，明确报错退出。
+  - 验证计划（待执行）：
+    - A: MuJoCo 回归：确保行为与现有 demo 一致。
+    - B: ROS2 回路验证：确认订阅/发布链路正确、动作话题格式匹配真机驱动。
+    - C: 真机 + RViz 验证：`/imu/data` 与 `/joint_states` 可视化正常，动作发布稳定。
+  - 当前进展状态：
+    - `status = 方案已确认并冻结，待开始代码实现（P0: 配置与接口骨架）`。
+
+- 2026-04-17 19:12:40 +0800：
+  - 主题：按已冻结方案完成第一阶段落地（真机/仿真后端切换 + ROS2接口 + 真机RViz工具）。
+  - 已完成代码改动：
+    - 配置层（`common/controller_config.h/.cpp` + `common/controller_config_v4_leg.json`）：
+      - 新增 `control_backend`（`mujoco` / `ros2_real`）
+      - 新增 `real_enable_rviz`
+      - 新增真机话题参数：`ros_topic_imu`、`ros_topic_joint_states`、`ros_topic_action_cmd`、`ros_topic_cmd_vel`、`ros_topic_walk_enable`
+      - 新增 `ros_data_timeout_sec`（超时保护）
+    - 真机接口（新增）：
+      - `sim_interface/ROS2_interface_v4_leg.h/.cpp`
+      - 订阅：`/imu/data`、`/joint_states`、`/cmd_vel`、`/walk_enable`
+      - 发布：`/rl_motion_control_command`（12腿目标 + 17上肢零值）
+      - 关节映射采用 name 匹配（不依赖消息顺序）
+    - 入口统一（`demo/walk_mpc_wbc_leg.cpp`）：
+      - 保留单一入口 `walk_mpc_wbc_leg`
+      - `runMujoco(...)` 与 `runRos2Real(...)` 双分支
+      - 运行时由 `control_backend` 配置切换
+      - `real_enable_rviz=true` 时打印可直接执行的 RViz 启动命令
+    - 构建层（`CMakeLists.txt`）：
+      - 新增 `OPENLOONG_ENABLE_ROS2` 可选开关
+      - 自动检测 ROS2 依赖并设置 `OPENLOONG_HAS_ROS2`
+      - 无 ROS2 时自动排除 `ROS2_interface_v4_leg.cpp`，仿真模式仍可独立构建
+  - 新增 RViz 工具（仅真机模式使用）：
+    - `tools/real_robot/start_rviz_real_leg.sh`
+    - `tools/real_robot/speedbot_v4_leg_real.rviz`
+    - `tools/real_robot/README.md`
+    - 作用：启动 `robot_state_publisher + rviz2`，默认对齐 `/joint_states` 与 `/imu/data`。
+  - 编译验证：
+    - ROS2 ON：`cmake --build build -j4` 通过（4个demo全部链接成功）
+    - ROS2 OFF：`cmake -S . -B build_no_ros2 -DOPENLOONG_ENABLE_ROS2=OFF && cmake --build build_no_ros2 -j4` 通过
+  - 当前状态：
+    - `status = P0完成（代码与构建链路打通）`
+    - 待执行：真实 ROS2 网络环境联调（topic 实流验证、真机动作回路验证、RViz 显示验证）
+
+- 2026-04-17 19:40:18 +0800：
+  - 主题：按用户要求完成“本机 ROS2 + RViz 可直接运行配置”。
+  - 已完成：
+    - 新增真机默认配置文件：
+      - `common/controller_config_v4_leg_real.json`
+      - 默认 `control_backend=ros2_real`、`real_enable_rviz=true`
+    - demo 入口支持外部配置路径：
+      - `demo/walk_mpc_wbc_leg.cpp` 新增 `OPENLOONG_CONTROLLER_CONFIG` 环境变量读取；
+      - 未设置时仍回退 `../common/controller_config_v4_leg.json`。
+    - 新增一键启动脚本：
+      - `tools/real_robot/start_real_control_leg.sh`
+      - 自动 source `/opt/ros/humble/setup.bash`（若未 source）
+      - 默认加载 `controller_config_v4_leg_real.json`
+      - 可选 `OPENLOONG_START_RVIZ=0` 关闭随控启动 RViz。
+    - RViz 启动脚本增强：
+      - `tools/real_robot/start_rviz_real_leg.sh` 增加 ROS2 自动 source 逻辑。
+    - 文档更新：
+      - `tools/real_robot/README.md` 增加“一键启动”与环境变量覆盖说明。
+  - 关键修复：
+    - 修复 `ros2_real` 启动崩溃：
+      - 原因：`ROS2_interface_v4_leg` 中 `SingleThreadedExecutor` 在 `rclcpp::init` 前构造，导致 context null。
+      - 修复：`executor_` 改为延迟创建（`initialize()` 内创建 shared_ptr）。
+      - 影响文件：
+        - `sim_interface/ROS2_interface_v4_leg.h/.cpp`
+  - 本机验证：
+    - 环境探测：`/opt/ros/humble` 存在，`ros2`、`rviz2`、`robot_state_publisher` 可用。
+    - 编译验证：`cmake --build build -j4` 通过。
+    - 运行验证：
+      - `OPENLOONG_CONTROLLER_CONFIG=../common/controller_config_v4_leg_real.json timeout 6s ./build/walk_mpc_wbc_leg`
+      - 成功进入 `ros2_real` 循环并输出 RViz 启动提示，无崩溃。
+      - `OPENLOONG_START_RVIZ=0 timeout 6s ./tools/real_robot/start_real_control_leg.sh` 正常启动。
+  - 当前状态：
+    - `status = 本机 ROS2/RViz 启动链路配置完成，可直接联调真机话题`
+
+- 2026-04-17 20:18:56 +0800：
+  - 主题：支持“MuJoCo 仿真模式下测试 ROS2 通讯，并用 RViz 订阅状态可视化”。
+  - 本轮实现：
+    - 配置扩展（`common/controller_config.h/.cpp`）新增：
+      - `sim_enable_ros2_state_pub`
+      - `sim_enable_rviz`
+      - `sim_ros_publish_dt`
+    - `walk_mpc_wbc_leg`（`demo/walk_mpc_wbc_leg.cpp`）的 `runMujoco(...)` 新增仿真 ROS2 状态桥：
+      - 在 MuJoCo 主循环中按 `sim_ros_publish_dt` 周期发布状态；
+      - 发布内容来自 `DataBus`；
+      - 打印 RViz 启动提示（仅 `sim_enable_rviz=true`）。
+    - 新增模块：
+      - `sim_interface/ROS2_state_pub_v4_leg.h/.cpp`
+      - 发布话题：
+        - `/imu/data`（`sensor_msgs/Imu`）
+        - `/joint_states`（`sensor_msgs/JointState`，12腿关节名）
+    - 配置文件：
+      - 更新 `common/controller_config_v4_leg.json`、`common/controller_config_v4_leg_real.json`（补仿真ROS2字段）
+      - 新增 `common/controller_config_v4_leg_mujoco_ros2.json`（开箱即用的仿真ROS2配置）
+    - 工具脚本：
+      - 新增 `tools/sim_ros2/start_mujoco_ros2_rviz_leg.sh`
+      - 新增 `tools/sim_ros2/README.md`
+      - 脚本支持 `OPENLOONG_START_RVIZ=0`（只跑仿真+ROS2发布，不拉RViz）
+  - 编译验证：
+    - ROS2 ON：`cmake --build build -j4` 通过。
+    - ROS2 OFF：`cmake -S . -B build_no_ros2 -DOPENLOONG_ENABLE_ROS2=OFF && cmake --build build_no_ros2 -j4` 通过。
+  - 联通性验证（仿真运行时）：
+    - `ros2 topic list` 可见 `/imu/data`、`/joint_states`。
+    - `ros2 topic hz /joint_states` 实测约 `102 Hz`（配置 `sim_ros_publish_dt=0.01`，目标 100Hz）。
+  - 备注：
+    - 使用 `timeout` 强制结束仿真进程时，观测到退出阶段可能出现核心转储；正常手动运行不影响 ROS2 状态发布与 RViz 可视化联调。
+  - 当前状态：
+    - `status = 已支持 MuJoCo->ROS2 状态桥接，可在 RViz 订阅仿真状态数据`
+
+- 2026-04-17 20:41:07 +0800：
+  - 主题：修复用户反馈的两项问题（`start_mujoco_ros2_rviz_leg.sh` 下仿真失稳、RViz 报 `Error retrieving file`）。
+  - 排查结论：
+    - 失稳高风险点：脚本使用独立配置文件，容易与用户当前稳定参数漂移（虽然初版文件内容接近，但实际使用中存在失配风险）。
+    - RViz 报错根因：`speedbot_v4_leg.urdf` 中 mesh 路径为 `./meshes/...`，RViz/resource_retriever 对相对路径解析不稳定，导致 `Error retrieving file`。
+  - 修复落地：
+    - `demo/walk_mpc_wbc_leg.cpp`
+      - 增加环境变量覆写能力：
+        - `OPENLOONG_CONTROL_BACKEND`
+        - `OPENLOONG_SIM_ENABLE_ROS2_STATE_PUB`
+        - `OPENLOONG_SIM_ENABLE_RVIZ`
+        - `OPENLOONG_SIM_ROS_PUBLISH_DT`
+      - 目的：不改你常用配置文件内容，也可通过脚本稳定启用仿真 ROS2 状态发布。
+    - `tools/sim_ros2/start_mujoco_ros2_rviz_leg.sh`
+      - 默认配置改为 `common/controller_config_v4_leg.json`（与手动 `./walk_mpc_wbc_leg` 保持一致）
+      - 通过环境变量强制启用 `mujoco + ROS2状态发布`，减少参数漂移导致的不稳定。
+    - `tools/real_robot/start_rviz_real_leg.sh`
+      - 启动前生成临时 URDF，把 `filename="./meshes/..."` 重写为绝对 `file://.../meshes/...`；
+      - `robot_state_publisher` 使用临时 URDF；
+      - 退出时自动清理临时文件。
+      - 目的：消除 RViz 模型加载 `Error retrieving file`。
+    - `tools/sim_ros2/README.md`
+      - 同步更新脚本行为和环境变量说明。
+
+- 2026-04-17 19:55:32 +0800：
+  - 主题：继续排查“`start_mujoco_ros2_rviz_leg.sh` 启动后后仰摔倒 + RViz动作不同步”。
+  - 新增根因定位：
+    - `demo/walk_mpc_wbc_leg.cpp` 的 `runMujoco` 中，`AUTO_WALK` 触发后会被后续 `simTime in [openLoopCtrTime, openLoopCtrTime+0.002)` 的 `motionState=Stand` 覆盖。
+    - 结果：脚本虽打印 `AutoWalk enabled`，但 `motionState` 实际长期停留 `Stand`，随后出现站立后仰摔倒；这不是 ROS2 发布本身导致。
+  - 本轮修复：
+    - 文件：`demo/walk_mpc_wbc_leg.cpp`
+    - 修改点：
+      - 将 open-loop 结束后的 Stand 初始化从“2ms窗口反复覆盖”改为“一次性初始化”（`postOpenLoopStandInitDone`）。
+      - 保留 `AUTO_WALK`，并新增启动打点日志：`[AutoWalk] started at t=...`。
+  - 验证结果：
+    - 运行：`OPENLOONG_CONTROL_BACKEND=mujoco OPENLOONG_SIM_ENABLE_ROS2_STATE_PUB=1 OPENLOONG_AUTOWALK=1 ./walk_mpc_wbc_leg`
+      - 控制台出现：`[AutoWalk] started at t=3.001 s`。
+      - 日志统计：`motionState_count{stand=3000,walk=31400,walk2stand=0}`，`first_walk_t=3.001`。
+      - 姿态/高度统计：`min_base_z=0.0000`，`max_abs_pitch=0.0615`，未出现后仰倒地。
+    - 运行脚本：`OPENLOONG_START_RVIZ=0 tools/sim_ros2/start_mujoco_ros2_rviz_leg.sh`
+      - 日志统计：`first_walk_t=3.001`，`stand=3000, walk=25713`，自动进入 Walk 正常。
+  - RViz 同步链路复核：
+    - ROS2话题存在：`/imu/data`、`/joint_states`、`/tf`。
+    - `/joint_states` 频率约 102Hz（`sim_ros_publish_dt=0.01`）。
+    - `/tf` 已发布 `world -> base_link`，且平移/姿态随仿真变化（非固定值），满足 RViz 与 MuJoCo 同步所需条件。
+  - 当前结论：
+    - “脚本启动后直接后仰摔倒”主因已修复（状态机时序冲突）。
+    - RViz 不同步需优先确认使用 `tools/sim_ros2/speedbot_v4_leg_sim.rviz`（`Fixed Frame=world`）且只保留单一 `/joint_states` 发布源。
+
+- 2026-04-20 14:06:04 +0800：
+  - 主题：按用户要求收敛“真机/仿真启动入口 + V4 配置使用”，减少重复脚本和重复配置依赖。
+  - 本轮改动：
+    - 新增统一启动脚本：`tools/start_control_v4_leg.sh`
+      - 单一入口支持三种模式：`OPENLOONG_CONTROL_MODE=mujoco|mujoco_ros2|ros2_real`
+      - 统一默认配置：`common/controller_config_v4_leg.json`
+      - 通过环境变量覆盖后端/ROS2发布/RViz/自动起步参数。
+    - 旧脚本改为兼容转发（保留旧命令，不再维护重复逻辑）：
+      - `tools/real_robot/start_real_control_leg.sh` -> 转发到统一脚本（`ros2_real`）
+      - `tools/sim_ros2/start_mujoco_ros2_rviz_leg.sh` -> 转发到统一脚本（`mujoco_ros2`）
+    - 文档更新：
+      - `tools/real_robot/README.md`
+      - `tools/sim_ros2/README.md`
+      - 两处均改为“统一脚本 + 统一配置”说明。
+  - 验证：
+    - `timeout 8s OPENLOONG_CONTROL_MODE=mujoco OPENLOONG_START_RVIZ=0 ./tools/start_control_v4_leg.sh` 可正常启动并自动进入 Walk。
+    - `bash -n` 检查三个启动脚本语法通过。
+  - 结论：
+    - 现已实现“真机、仿真使用同一启动脚本”，且主流程统一使用单一 V4_leg 配置文件，重复逻辑显著减少。
+
+- 2026-04-20 14:16:46 +0800：
+  - 主题：按用户要求清理 tools 与重复配置文件。
+  - 删除文件：
+    - `tools/real_robot/start_real_control_leg.sh`
+    - `tools/sim_ros2/start_mujoco_ros2_rviz_leg.sh`
+    - `common/controller_config_v4_leg_real.json`
+    - `common/controller_config_v4_leg_mujoco_ros2.json`
+  - 文档同步：
+    - 更新 `tools/real_robot/README.md`、`tools/sim_ros2/README.md`，移除对已删除旧脚本的引用。
+  - 当前保留入口：
+    - 统一启动脚本 `tools/start_control_v4_leg.sh`
+    - 统一主配置 `common/controller_config_v4_leg.json`
+  - 快速验证：
+    - `timeout 6s OPENLOONG_CONTROL_MODE=mujoco OPENLOONG_START_RVIZ=0 ./tools/start_control_v4_leg.sh` 正常启动。
+
+- 2026-04-20 14:42:18 +0800：
+  - 主题：按用户意见进一步精简“模式/配置/RViz”重复项。
+  - 关键收敛：
+    - 模式入口统一：仅保留 `OPENLOONG_CONTROL_MODE`（`mujoco|mujoco_ros2|ros2_real`），移除脚本中的 `OPENLOONG_CONTROL_BACKEND` 传递。
+    - 配置去冗余：`common/controller_config_v4_leg.json` 删除
+      - `control_backend`
+      - `real_enable_rviz`
+      - `sim_enable_rviz`
+      - `ros_topic_cmd_vel`
+      - `ros_topic_walk_enable`
+    - ROS2 真机接口对齐 RL 实际链路：仅使用
+      - 订阅：`/imu/data`、`/joint_states`
+      - 发布：`/rl_motion_control_command`
+      - 不再订阅不存在的 `/cmd_vel`、`/walk_enable`。
+    - RViz 合并：删除仿真/真机两份配置差异，统一为
+      - `tools/real_robot/speedbot_v4_leg.rviz`
+      - 删除 `tools/sim_ros2/speedbot_v4_leg_sim.rviz`。
+  - 代码变更点：
+    - `demo/walk_mpc_wbc_leg.cpp`：环境变量模式映射收敛；real 模式改为可选 `OPENLOONG_AUTOWALK`（默认关闭）不依赖外部 cmd 话题。
+    - `sim_interface/ROS2_interface_v4_leg.h/.cpp`：移除 `cmd_vel/walk_enable` 订阅与接口。
+    - `common/controller_config.h/.cpp`：移除对应配置字段读取。
+    - `tools/start_control_v4_leg.sh`：统一单 RViz 配置与单模式变量。
+    - `tools/real_robot/start_rviz_real_leg.sh`：默认 RViz 文件改为统一文件名。
+  - 验证：
+    - 编译通过：`cmake --build build -j4`
+    - 启动冒烟通过：
+      - `OPENLOONG_CONTROL_MODE=mujoco`
+      - `OPENLOONG_CONTROL_MODE=mujoco_ros2`
+      - `OPENLOONG_CONTROL_MODE=ros2_real`
+  - 追加安全修正：`tools/start_control_v4_leg.sh` 调整为
+    - `ros2_real` 默认 `OPENLOONG_AUTOWALK=0`
+    - `mujoco/mujoco_ros2` 默认 `OPENLOONG_AUTOWALK=1`
+
+- 2026-04-20 15:17:39 +0800：
+  - 主题：处理用户反馈“mujoco_ros2 不弹 RViz + AUTOWALK 命名去 OPENLOONG 前缀”。
+  - 修复1（RViz不弹窗）：
+    - 根因：`tools/start_control_v4_leg.sh` 中 `START_RVIZ` 默认值是 `0`，即使 `mujoco_ros2` 也不会自动起 RViz。
+    - 修改：
+      - `mujoco_ros2/ros2_real` 模式下，若未显式设置 `START_RVIZ`，默认置为 `1`；
+      - `mujoco` 模式默认 `0`。
+    - 复测：`CONTROL_MODE=mujoco_ros2 ./tools/start_control_v4_leg.sh` 可看到 `rviz2` 与 `robot_state_publisher` 启动日志。
+  - 修复2（AUTOWALK命名去前缀）：
+    - 新变量：`AUTOWALK`、`AUTOWALK_SPEED`（无 `OPENLOONG_` 前缀）。
+    - 兼容策略：代码与脚本均“新名优先，旧名兼容回退”。
+    - 影响文件：
+      - `tools/start_control_v4_leg.sh`
+      - `demo/walk_mpc_wbc_leg.cpp`
+      - `demo/walk_mpc_wbc_v4.cpp`
+      - `tools/real_robot/README.md`
+      - `tools/sim_ros2/README.md`
+  - 额外整理：
+    - `CONTROL_MODE` 已作为推荐模式变量（兼容 `OPENLOONG_CONTROL_MODE` 旧名）。
+    - 移除脚本调试残留输出 `need_ros2`。
+  - 验证：
+    - `CONTROL_MODE=mujoco AUTOWALK=1 AUTOWALK_SPEED=0.33` 启动日志显示 `AutoWalk enabled, speed=0.33`。
+    - `CONTROL_MODE=mujoco_ros2` 启动时可见 RViz 相关日志。
+
+- 2026-04-20 16:07:25 +0800：
+  - 主题：按用户要求进一步精简运行脚本 AUTOWALK 配置。
+  - 本轮调整：
+    - `tools/start_control_v4_leg.sh` 去掉 `AUTOWALK_SPEED/OPENLOONG_AUTOWALK_SPEED`。
+    - 仅保留 `AUTOWALK` 开关，默认值改为 `0`（关闭）。
+    - 自动起步速度不再由环境变量配置，统一使用控制配置中的 `forward_speed_default`。
+  - 代码同步：
+    - `demo/walk_mpc_wbc_leg.cpp` 删除 `AUTOWALK_SPEED` 环境变量读取（MuJoCo/ros2_real 两分支）。
+    - `demo/walk_mpc_wbc_v4.cpp` 统一只读取 `AUTOWALK`。
+  - 文档同步：
+    - `tools/sim_ros2/README.md` 移除 `AUTOWALK_SPEED` 说明，更新为“默认关闭，速度用配置默认值”。
+  - RViz排查结论：
+    - `mujoco_ros2` 不弹 RViz 的根因是 `START_RVIZ` 默认值导致。
+    - 现已修复为：`CONTROL_MODE=mujoco_ros2` 时，未显式设置 `START_RVIZ` 也会自动拉起 RViz。
+  - 验证：
+    - `CONTROL_MODE=mujoco_ros2 ./tools/start_control_v4_leg.sh` 可看到 `rviz2` 与 `robot_state_publisher` 启动日志。
+    - 键盘控制逻辑（Space/Q/E/S）未改动。
+
+- 2026-04-20 16:57:14 +0800：
+  - 主题：修复“脚本启动后后摔，但手工 `walk_mpc_wbc_v4` 正常站立”的差异。
+  - 根因：
+    - 统一脚本此前固定执行 `walk_mpc_wbc_leg`，与用户手工运行的 `walk_mpc_wbc_v4` 不是同一控制链路（模型/任务配置不同），导致稳定性表现不一致。
+  - 调整：
+    - `tools/start_control_v4_leg.sh` 新增目标选择逻辑：
+      - `MODE=mujoco` 默认 `TARGET=v4`（执行 `walk_mpc_wbc_v4` + `controller_config_v4.json`）
+      - `MODE=mujoco_ros2|ros2_real` 固定 `TARGET=leg`（执行 `walk_mpc_wbc_leg` + `controller_config_v4_leg.json`）
+    - 环境变量保持简化：仅保留 `AUTOWALK` 开关（默认 `0`），移除速度环境变量。
+  - 兼容说明：
+    - 如需在 `mujoco` 下继续跑 leg，可显式设置：`TARGET=leg`。
+  - 验证：
+    - `./tools/start_control_v4_leg.sh`（默认）显示 `target : v4`，启动 `walk_mpc_wbc_v4`。
+    - `CONTROL_MODE=mujoco TARGET=leg AUTOWALK=0` 可启动 leg 链路。
+    - `CONTROL_MODE=mujoco_ros2` 可启动 leg + ROS2 + RViz。
+
+- 2026-04-21 10:40:17 +0800：
+  - 主题：修复 `./walk_mpc_wbc_leg` 启动后站立后仰摔倒。
+  - 复现结果：
+    - 未开启 `AUTOWALK` 时，约 `4.9s` 出现后仰跌倒（`min_z=-0.1630`，`max_abs_pitch=1.5715`，全程 `motionState=Stand`）。
+  - 根因：
+    - `runControlPipeline` 在 `Stand` 状态下将关节指令强制覆盖为“固定姿态 + 零力矩”，丢弃了 WBC 站立输出；
+    - 开环后长时间纯 PD 定位导致站立鲁棒性不足，出现后仰倒地。
+  - 修复：
+    - `demo/walk_mpc_wbc_leg.cpp`：
+      - 增加 `holdFixedStandPose` 开关参数；
+      - 仅在开环阶段（前 3s）保持固定姿态+零力矩；
+      - 开环后 `Stand` 同样使用 WBC 生成的 `pos/vel/tau`（与 v4 思路一致）。
+  - 验证：
+    - `timeout 14s ./build/walk_mpc_wbc_leg`：
+      - `min_z=0.0000`，`max_abs_pitch=0.0615`，`Stand` 全程稳定，无后摔。
+
+- 2026-04-21 11:05:00 +0800：
+  - 主题：统一启动脚本的机型切换配置项，并核对 config / RViz 映射。
+  - 本轮修改：
+    - `tools/start_control_v4_leg.sh`
+      - 明确机型配置项：`ROBOT_VARIANT=v4|leg`（兼容旧变量 `TARGET`）。
+      - 完整映射：
+        - `v4 -> walk_mpc_wbc_v4 + common/controller_config_v4.json + models/speedbot_v4/speedbot_v4.urdf + tools/real_robot/speedbot_v4.rviz`
+        - `leg -> walk_mpc_wbc_leg + common/controller_config_v4_leg.json + models/speedbot_v4/speedbot_v4_leg.urdf + tools/real_robot/speedbot_v4_leg.rviz`
+      - 增加启动日志输出 `rviz/urdf` 实际路径，便于排查。
+      - 保留约束：`mujoco_ros2/ros2_real` 目前仅支持 `ROBOT_VARIANT=leg`，若设为 `v4` 会明确报错退出（不再静默切换）。
+    - 文档同步：
+      - `tools/real_robot/README.md`
+      - `tools/sim_ros2/README.md`
+      - 主变量统一改为 `ROBOT_VARIANT`，并注明 `TARGET` 仅作兼容。
+  - 验证：
+    - `CONTROL_MODE=mujoco ROBOT_VARIANT=v4 START_RVIZ=0 ./tools/start_control_v4_leg.sh` 可启动 v4 链路。
+    - `CONTROL_MODE=mujoco ROBOT_VARIANT=leg START_RVIZ=0 ./tools/start_control_v4_leg.sh` 可启动 leg 链路。
+    - `CONTROL_MODE=mujoco_ros2 ROBOT_VARIANT=v4` 会被正确拦截并提示仅支持 leg。
+
+- 2026-04-21 11:20:00 +0800：
+  - 主题：为 speedbot_v4 增加 RViz 可视化（MuJoCo ROS2 状态发布）支持，对齐 leg 方案。
+  - 代码改动：
+    - 新增 `sim_interface/ROS2_state_pub_v4.h/.cpp`：
+      - 发布 `/imu/data`、`/joint_states`、`/tf`（world->base_link）。
+      - 关节发布顺序覆盖 v4 全部22自由度（腿12 + 手臂10）。
+    - 修改 `demo/walk_mpc_wbc_v4.cpp`：
+      - 接入 `ROS2_StatePub_V4`，支持 `CONTROL_MODE=mujoco_ros2` 自动开启仿真状态发布。
+      - 增加与 leg 一致的环境变量覆盖：
+        - `CONTROL_MODE`/`OPENLOONG_CONTROL_MODE`
+        - `SIM_ENABLE_ROS2_STATE_PUB`/`OPENLOONG_SIM_ENABLE_ROS2_STATE_PUB`
+        - `SIM_ROS_PUBLISH_DT`/`OPENLOONG_SIM_ROS_PUBLISH_DT`
+      - 增加 `OPENLOONG_CONTROLLER_CONFIG` 配置路径覆盖（修复脚本配置路径与实际加载不一致问题）。
+    - 修改 `tools/start_control_v4_leg.sh`：
+      - `mujoco_ros2` 允许 `ROBOT_VARIANT=v4|leg`；
+      - `ros2_real` 仍仅允许 `ROBOT_VARIANT=leg`。
+    - 配置/文档同步：
+      - `common/controller_config_v4.json` 增加 ROS2 发布相关配置项。
+      - `tools/sim_ros2/README.md` 更新为 v4/leg 双支持说明。
+      - `tools/real_robot/README.md` 更新机型支持描述。
+  - 验证结果：
+    - 构建通过：`cmake -S . -B build && cmake --build build -j4`。
+    - `CONTROL_MODE=mujoco_ros2 ROBOT_VARIANT=v4 START_RVIZ=0` 实测可发布：
+      - topics: `/imu/data`, `/joint_states`, `/tf`
+      - `/joint_states` 频率约 `~102Hz`（配置 `sim_ros_publish_dt=0.01` 对应约100Hz）。
+      - 启动日志出现 `[ROS2-Sim] enabled ...`。
+    - 兼容性：`CONTROL_MODE=ros2_real ROBOT_VARIANT=v4` 会被脚本明确拦截（仅 leg 支持真机接口）。
+
+- 2026-04-21 11:30:00 +0800：
+  - 主题：排查“mujoco_ros2 下 RViz base 姿态不变化”。
+  - 排查结论：
+    - `mujoco_ros2 + v4` 下 IMU 与 TF 都有实时数据：
+      - `/imu/data` orientation 与角速度持续变化；
+      - `tf2_echo world base_link` 可见平移和RPY连续变化。
+    - RViz显示不动的直接原因是 `speedbot_v4(.rviz)` 与 `speedbot_v4_leg.rviz` 的 `Fixed Frame` 设为 `base_link`，视觉上会“跟着机体走”。
+  - 修复：
+    - `tools/real_robot/speedbot_v4.rviz`：`Fixed Frame` 改为 `world`。
+    - `tools/real_robot/speedbot_v4_leg.rviz`：`Fixed Frame` 改为 `world`。
+  - 说明：
+    - 若真机链路没有提供 `world` 相关TF，可在RViz里临时改回 `base_link`。
+
+- 2026-04-21 11:26:00 +0800：
+  - 主题：确认 `start_rviz_real_leg` 与 `mujoco_ros2` 数据一致性，并验证“MuJoCo驱动 real 控制流程”。
+  - 结论：
+    - `start_rviz_real_leg.sh` 默认订阅 `/joint_states` 与 `/imu/data`，与 `mujoco_ros2` 发布话题一致。
+    - 可用 MuJoCo 验证 real 控制链路（leg）：`mujoco_ros2` 提供状态输入，`ros2_real` 消费状态并输出 `/rl_motion_control_command`。
+  - 实测：
+    - 同时运行 `CONTROL_MODE=mujoco_ros2 ROBOT_VARIANT=leg` 与 `CONTROL_MODE=ros2_real` 后，检测到话题：
+      - `/imu/data`, `/joint_states`, `/tf`, `/rl_motion_control_command`
+    - `/rl_motion_control_command` 有连续非零数据输出，`walk_mpc_wbc_leg` 日志显示 `[Backend] ros2_real` 正常进入控制循环。
+  - 备注：
+    - `v4` 目前仅支持 `mujoco_ros2` 发布与 RViz 可视化；`ros2_real` 仅实现于 `walk_mpc_wbc_leg`。
+
+- 2026-04-21 14:26:00 +0800：
+  - 主题：针对用户安全关注，修复“MuJoCo仅反馈模式”与 `walking_controller.py` 协议一致性。
+  - 变更1（反馈-only 仿真模式）：
+    - 新增控制配置项：`sim_feedback_only`（默认 `false`），并支持环境变量覆盖：
+      - `SIM_FEEDBACK_ONLY`（兼容 `OPENLOONG_SIM_FEEDBACK_ONLY`）
+    - 生效逻辑（`walk_mpc_wbc_leg` / `walk_mpc_wbc_v4`）：
+      - `sim_feedback_only=true` 时，MuJoCo端仅发布 ROS2 反馈数据（IMU/joint_states/TF），
+      - 跳过本地 MPC/WBC/PVT 控制流程，且每步下发零力矩，不再主动控制机器人。
+      - `AUTOWALK` 在该模式下被显式忽略并打印提示。
+    - 启动脚本 `tools/start_control_v4_leg.sh` 已透传 `SIM_FEEDBACK_ONLY` 并打印当前值。
+  - 变更2（对齐 RL 脚本 joint_states 顺序）：
+    - `sim_interface/ROS2_state_pub_v4_leg.cpp` 的 `/joint_states` 发布顺序改为与
+      `ref/walking_parameters/walking_controller.py` 中 `ROS_JOINT_NAMES` 完全一致：
+      - [LHR, LHY, LHP, LAR, LAP, RHY, LK, RK, RHR, RAP, RHP, RAR]
+    - 增加显式映射 `ros_order_index -> internal_index`，确保 name 与 position/velocity/effort 同步对齐。
+  - 验证：
+    - 编译通过：`cmake -S . -B build && cmake --build build -j4`。
+    - `CONTROL_MODE=mujoco_ros2 ROBOT_VARIANT=leg SIM_FEEDBACK_ONLY=1 AUTOWALK=1`：
+      - 日志出现 `[SimMode] feedback_only=1 ... torque output disabled` 与 `[AutoWalk] ignored ...`。
+      - `/joint_states` name 顺序与 RL 脚本一致。
+    - 与 `ros2_real` 联合验证：
+      - 可同时观察到 `/imu/data`、`/joint_states`、`/tf`、`/rl_motion_control_command`。
+      - `ros2_real` 持续输出 29 维命令数据，流程连通。
+
+- 2026-04-21 14:34:00 +0800：
+  - 主题：按用户要求回退“1) MuJoCo仅反馈模式”改动。
+  - 已回退内容：
+    - 移除 `sim_feedback_only` 配置项与 `SIM_FEEDBACK_ONLY` 环境变量链路（config/demo/script/readme）。
+    - 移除 `walk_mpc_wbc_leg.cpp` 与 `walk_mpc_wbc_v4.cpp` 中“反馈-only分支/零力矩分支/忽略AUTOWALK分支”。
+  - 保留内容：
+    - `walking_controller.py` 协议一致性修复仍保留：
+      - `ROS2_state_pub_v4_leg` 的 `/joint_states` 发布顺序与 Python 脚本 `ROS_JOINT_NAMES` 对齐。
+  - 验证：
+    - `cmake --build build -j4` 编译通过。
+
+- 2026-04-21 16:41:12 +0800：
+  - 主题：按用户要求统一仿真/real 状态切换与键盘手动控制逻辑（复用现有程序语义，避免新增复杂链路）。
+  - 代码改动（`demo/walk_mpc_wbc_leg.cpp`）：
+    - 新增 `applyLegControlStateMachine(...)`，抽取并复用原 MuJoCo 端状态机与按键语义（`F/Space/W/S/A/D/Q/E/J/H`）。
+    - MuJoCo 分支改为调用该公共状态机函数，行为保持与原先一致。
+    - `ros2_real` 分支去掉固定 `openLoopCtrTime=3.0` 自动切换，改为与仿真一致：默认开环站立，按 `F` 手动进入闭环。
+    - `ros2_real` 新增轻量终端按键读取器 `TerminalKeyReader`（非阻塞、单字符），仅映射现有键位，不新增 ROS 话题或协议。
+    - `runControlPipeline(... holdFixedStandPose)` 在 `ros2_real` 分支改为使用 `openLoopPhaseActive`，确保开环/闭环行为与仿真一致。
+  - 验证：
+    - 编译：`cmake --build build -j4 --target walk_mpc_wbc_leg` 通过。
+    - 启动自检：`CONTROL_MODE=ros2_real timeout 3s ./walk_mpc_wbc_leg` 正常进入 real 后端并打印按键提示；在非TTY环境下会提示 `terminal keyboard disabled: stdin is not a tty`（符合预期）。
+
+- 2026-04-21 16:59:02 +0800：
+  - 主题：`sim` vs `real` 控制流程差异复核 + 站立假数据模板 + real流程验证。
+  - 差异复核结论（`demo/walk_mpc_wbc_leg.cpp` + `sim_interface/*`）：
+    - 状态机/键盘语义：`sim` 与 `real` 现已共用 `applyLegControlStateMachine(...)`，键位语义一致（F/Space/W/S/A/D/Q/E/J/H）。
+    - 输入源不同：
+      - `sim` 使用 GLFW 回调按键 + MuJoCo 传感器（含 basePos/baseLinVel/touch）。
+      - `real` 使用终端键盘读取 + ROS2 IMU/joint_states；`basePos/baseLinVel` 在 ROS2接口层当前置零，`fL/fR` 置零。
+    - 输出执行不同：
+      - `sim`：WBC结果经 PVT 生成力矩，`MJ_interface.setMotorsTorque()` 下发。
+      - `real`：发布 `/rl_motion_control_command`（29维，前12腿部位置 + 后17维置零），不走 MuJoCo 力矩通道。
+    - 循环调度不同：
+      - `sim`：随 MuJoCo 物理步进（典型1kHz）+ 渲染循环60Hz。
+      - `real`：`steady_clock + sleep_until` 定时循环（main_control_dt，默认1kHz），含 `ros_data_timeout_sec` 失效保护。
+  - 模板产出：
+    - 新增 `tools/real_robot/fake_feedback_stand_leg.yaml`（来自 `mujoco_ros2` 实测抓取 `/imu/data`、`/joint_states` 单帧）。
+    - 模板特征：
+      - IMU 四元数接近单位（非零）；
+      - `joint_states` 名称/position/velocity/effort 均为12维，顺序与现有驱动链路一致。
+  - real流程验证（使用假数据主题注入）：
+    - 步骤：后台高频发布模板 IMU/joint_states -> 启动 `CONTROL_MODE=ros2_real ./walk_mpc_wbc_leg` -> 订阅 `/rl_motion_control_command`。
+    - 结果：
+      - 成功收到 29维动作命令，前12维非零、后17维为0（符合协议）。
+      - `ros2 topic hz /rl_motion_control_command` 观测平均发布频率约 `1000 Hz`。
+      - 交互终端下发送 `f` 可触发日志：`[OpenLoop] closed-loop enabled at t=...`，证明 real 键盘状态切换链路有效。
