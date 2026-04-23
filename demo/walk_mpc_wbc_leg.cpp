@@ -85,6 +85,144 @@ bool parseBoolEnv(const char *envValue, bool &outValue)
     return false;
 }
 
+bool parseDoubleEnv(const char *envValue, double &outValue)
+{
+    if (envValue == nullptr)
+    {
+        return false;
+    }
+    char *endPtr = nullptr;
+    const double v = std::strtod(envValue, &endPtr);
+    if (endPtr == envValue)
+    {
+        return false;
+    }
+    outValue = v;
+    return true;
+}
+
+struct MujocoRegressionScript
+{
+    bool enabled{false};
+    double tCloseLoop{5.0};
+    double tWalkStart{10.0};
+    double tPressW{10.2};
+    double tPressA{13.0};
+    double tPressD{15.0};
+    double tPressQ{17.0};
+    double tPressE{19.0};
+    double tPressH{21.0};
+    double tPressJ{26.0};
+    double simEndTime{30.0};
+
+    bool sentF{false};
+    bool sentSpace{false};
+    bool sentW{false};
+    bool sentA{false};
+    bool sentD{false};
+    bool sentQ{false};
+    bool sentE{false};
+    bool sentH{false};
+    bool sentJ{false};
+
+    void inject(double simTime, UIctr::ButtonState &button)
+    {
+        if (!enabled)
+        {
+            return;
+        }
+
+        if (!sentF && simTime >= tCloseLoop)
+        {
+            button.key_f = true;
+            sentF = true;
+            std::cout << "[AutoRegression] press F at t=" << simTime << " s" << std::endl;
+        }
+        if (!sentSpace && simTime >= tWalkStart)
+        {
+            button.key_space = true;
+            sentSpace = true;
+            std::cout << "[AutoRegression] press Space at t=" << simTime << " s" << std::endl;
+        }
+        if (!sentW && simTime >= tPressW)
+        {
+            button.key_w = true;
+            sentW = true;
+            std::cout << "[AutoRegression] press W at t=" << simTime << " s" << std::endl;
+        }
+        if (!sentA && simTime >= tPressA)
+        {
+            button.key_a = true;
+            sentA = true;
+            std::cout << "[AutoRegression] press A at t=" << simTime << " s" << std::endl;
+        }
+        if (!sentD && simTime >= tPressD)
+        {
+            button.key_d = true;
+            sentD = true;
+            std::cout << "[AutoRegression] press D at t=" << simTime << " s" << std::endl;
+        }
+        if (!sentQ && simTime >= tPressQ)
+        {
+            button.key_q = true;
+            sentQ = true;
+            std::cout << "[AutoRegression] press Q at t=" << simTime << " s" << std::endl;
+        }
+        if (!sentE && simTime >= tPressE)
+        {
+            button.key_e = true;
+            sentE = true;
+            std::cout << "[AutoRegression] press E at t=" << simTime << " s" << std::endl;
+        }
+        if (!sentH && simTime >= tPressH)
+        {
+            button.key_h = true;
+            sentH = true;
+            std::cout << "[AutoRegression] press H at t=" << simTime << " s" << std::endl;
+        }
+        if (!sentJ && simTime >= tPressJ)
+        {
+            button.key_j = true;
+            sentJ = true;
+            std::cout << "[AutoRegression] press J at t=" << simTime << " s" << std::endl;
+        }
+    }
+};
+
+MujocoRegressionScript loadMujocoRegressionScriptFromEnv()
+{
+    MujocoRegressionScript script;
+    parseBoolEnv(getEnvEither("MUJOCO_REGRESSION_SCRIPT", "OPENLOONG_MUJOCO_REGRESSION_SCRIPT"), script.enabled);
+
+    double tmp = 0.0;
+    if (parseDoubleEnv(getEnvEither("MUJOCO_REGRESSION_SIM_END", "OPENLOONG_MUJOCO_REGRESSION_SIM_END"), tmp))
+    {
+        script.simEndTime = std::clamp(tmp, 20.0, 300.0);
+    }
+    if (parseDoubleEnv(getEnvEither("MUJOCO_REGRESSION_CLOSE_LOOP_T", "OPENLOONG_MUJOCO_REGRESSION_CLOSE_LOOP_T"), tmp))
+    {
+        script.tCloseLoop = std::clamp(tmp, 0.5, script.simEndTime - 5.0);
+    }
+    if (parseDoubleEnv(getEnvEither("MUJOCO_REGRESSION_WALK_START_T", "OPENLOONG_MUJOCO_REGRESSION_WALK_START_T"), tmp))
+    {
+        script.tWalkStart = std::clamp(tmp, script.tCloseLoop + 0.5, script.simEndTime - 3.0);
+    }
+    if (parseDoubleEnv(getEnvEither("MUJOCO_REGRESSION_STOP_T", "OPENLOONG_MUJOCO_REGRESSION_STOP_T"), tmp))
+    {
+        script.tPressJ = std::clamp(tmp, script.tWalkStart + 6.0, script.simEndTime - 0.5);
+    }
+
+    const double walkBase = script.tWalkStart;
+    script.tPressW = walkBase + 0.2;
+    script.tPressA = walkBase + 3.0;
+    script.tPressD = walkBase + 5.0;
+    script.tPressQ = walkBase + 7.0;
+    script.tPressE = walkBase + 9.0;
+    script.tPressH = walkBase + 11.0;
+
+    return script;
+}
+
 void applyControllerEnvOverrides(ControllerConfig &cfg)
 {
     if (const char *modeEnv = getEnvEither("CONTROL_MODE", "OPENLOONG_CONTROL_MODE"); modeEnv != nullptr)
@@ -191,6 +329,80 @@ void configureMpcFromControllerConfig(const ControllerConfig &controllerConfig,
     WBC_solv.setContactMiu(controllerConfig.contactMiu);
 }
 
+double wrapAngle(double angle)
+{
+    return std::atan2(std::sin(angle), std::cos(angle));
+}
+
+struct EstimatorTruthLog
+{
+    double truth_base_pos_w[3]{0.0, 0.0, 0.0};
+    double truth_base_vel_w[3]{0.0, 0.0, 0.0};
+    double truth_rpy_w[3]{0.0, 0.0, 0.0};
+    double truth_in_est_frame[3]{0.0, 0.0, 0.0};
+    double est_err_pos[3]{0.0, 0.0, 0.0};
+    double est_err_vel[3]{0.0, 0.0, 0.0};
+    double est_err_yaw{0.0};
+
+    bool refReady{false};
+    double p0_truth[3]{0.0, 0.0, 0.0};
+    double yaw0_truth{0.0};
+    double est_pos0[3]{0.0, 0.0, 0.0};
+
+    void setReference(const double pTruthW[3], double yawTruth, const Eigen::Vector3d &estPos0)
+    {
+        for (int i = 0; i < 3; i++)
+        {
+            p0_truth[i] = pTruthW[i];
+            est_pos0[i] = estPos0(i);
+        }
+        yaw0_truth = yawTruth;
+        refReady = true;
+    }
+
+    void update(const DataBus &robotState,
+                const double pTruthW[3],
+                const double vTruthW[3],
+                const double rpyTruthW[3])
+    {
+        for (int i = 0; i < 3; i++)
+        {
+            truth_base_pos_w[i] = pTruthW[i];
+            truth_base_vel_w[i] = vTruthW[i];
+            truth_rpy_w[i] = rpyTruthW[i];
+        }
+
+        if (!refReady)
+        {
+            return;
+        }
+
+        const double c = std::cos(-yaw0_truth);
+        const double s = std::sin(-yaw0_truth);
+        const double dpx = pTruthW[0] - p0_truth[0];
+        const double dpy = pTruthW[1] - p0_truth[1];
+        const double dpz = pTruthW[2] - p0_truth[2];
+        truth_in_est_frame[0] = c * dpx - s * dpy;
+        truth_in_est_frame[1] = s * dpx + c * dpy;
+        truth_in_est_frame[2] = dpz;
+
+        double vTruthInEst[3]{0.0, 0.0, 0.0};
+        vTruthInEst[0] = c * vTruthW[0] - s * vTruthW[1];
+        vTruthInEst[1] = s * vTruthW[0] + c * vTruthW[1];
+        vTruthInEst[2] = vTruthW[2];
+
+        for (int i = 0; i < 3; i++)
+        {
+            const double estPosRel = robotState.base_pos_est(i) - est_pos0[i];
+            est_err_pos[i] = estPosRel - truth_in_est_frame[i];
+            est_err_vel[i] = robotState.base_vel_est(i) - vTruthInEst[i];
+        }
+
+        const double truthYawInEst = wrapAngle(rpyTruthW[2] - yaw0_truth);
+        est_err_yaw = wrapAngle(robotState.base_rpy(2) - truthYawInEst);
+    }
+};
+
 void addCommonLoggerItems(DataLogger &logger, int robot_nv)
 {
     logger.addIterm("dyn_time", 1);
@@ -211,6 +423,13 @@ void addCommonLoggerItems(DataLogger &logger, int robot_nv)
     logger.addIterm("base_vel_est", 3);
     logger.addIterm("base_rpy", 3);
     logger.addIterm("eul_est", 3);
+    logger.addIterm("truth_base_pos_w", 3);
+    logger.addIterm("truth_base_vel_w", 3);
+    logger.addIterm("truth_rpy_w", 3);
+    logger.addIterm("truth_in_est_frame", 3);
+    logger.addIterm("est_err_pos", 3);
+    logger.addIterm("est_err_vel", 3);
+    logger.addIterm("est_err_yaw", 1);
     logger.addIterm("Ufe", 13);
     logger.addIterm("phi", 1);
     logger.addIterm("phiSwitchMinRuntime", 1);
@@ -233,12 +452,37 @@ void recordCommonLogger(DataLogger &logger,
                         const DataBus &RobotState,
                         double dynTime,
                         double mainCtrlDt,
-                        double mpcCtrlDt)
+                        double mpcCtrlDt,
+                        const EstimatorTruthLog &truthLog)
 {
     double baseLinVelLog[3] = {
         RobotState.baseLinVel[0],
         RobotState.baseLinVel[1],
         RobotState.baseLinVel[2]};
+    double truthBasePosLog[3] = {
+        truthLog.truth_base_pos_w[0],
+        truthLog.truth_base_pos_w[1],
+        truthLog.truth_base_pos_w[2]};
+    double truthBaseVelLog[3] = {
+        truthLog.truth_base_vel_w[0],
+        truthLog.truth_base_vel_w[1],
+        truthLog.truth_base_vel_w[2]};
+    double truthRpyLog[3] = {
+        truthLog.truth_rpy_w[0],
+        truthLog.truth_rpy_w[1],
+        truthLog.truth_rpy_w[2]};
+    double truthInEstLog[3] = {
+        truthLog.truth_in_est_frame[0],
+        truthLog.truth_in_est_frame[1],
+        truthLog.truth_in_est_frame[2]};
+    double estErrPosLog[3] = {
+        truthLog.est_err_pos[0],
+        truthLog.est_err_pos[1],
+        truthLog.est_err_pos[2]};
+    double estErrVelLog[3] = {
+        truthLog.est_err_vel[0],
+        truthLog.est_err_vel[1],
+        truthLog.est_err_vel[2]};
 
     logger.startNewLine();
     logger.recItermData("dyn_time", dynTime);
@@ -259,6 +503,13 @@ void recordCommonLogger(DataLogger &logger,
     logger.recItermData("base_vel_est", RobotState.base_vel_est);
     logger.recItermData("base_rpy", RobotState.base_rpy);
     logger.recItermData("eul_est", RobotState.eul_est);
+    logger.recItermData("truth_base_pos_w", truthBasePosLog);
+    logger.recItermData("truth_base_vel_w", truthBaseVelLog);
+    logger.recItermData("truth_rpy_w", truthRpyLog);
+    logger.recItermData("truth_in_est_frame", truthInEstLog);
+    logger.recItermData("est_err_pos", estErrPosLog);
+    logger.recItermData("est_err_vel", estErrVelLog);
+    logger.recItermData("est_err_yaw", truthLog.est_err_yaw);
     logger.recItermData("Ufe", RobotState.fe_react_tau_cmd);
     logger.recItermData("phi", RobotState.phi);
     logger.recItermData("phiSwitchMinRuntime", RobotState.phiSwitchMinRuntime);
@@ -542,29 +793,17 @@ void applyLegControlStateMachine(const ControllerConfig &controllerConfig,
     }
 }
 
-void runControlPipeline(const ControllerConfig &controllerConfig,
-                        DataBus &RobotState,
-                        Pin_KinDyn_V4_Leg &kinDynSolver,
-                        StateEst &StateModule,
-                        JoyStickInterpreter &jsInterp,
-                        GaitScheduler &gaitScheduler,
-                        FootPlacement &footPlacement,
-                        MPC &MPC_solv,
-                        WBC_priority_V4_Leg &WBC_solv,
-                        const Eigen::VectorXd &qIniDes,
-                        const Eigen::VectorXd &qIniLeg,
-                        double stand_legLength,
-                        double foot_height,
-                        double dynTime,
-                        int &mpcCtrlCount,
-                        int mpcCtrlDecimation,
-                        bool setIniWhenWalk2Stand,
-                        bool holdFixedStandPose)
+bool runEstimationAndDynamics(DataBus &RobotState,
+                              Pin_KinDyn_V4_Leg &kinDynSolver,
+                              StateEst &StateModule,
+                              double dynTime)
 {
+    bool estInitThisStep = false;
     if (dynTime > 1 && StateModule.flag_init)
     {
         std::cout << "init state module" << std::endl;
         StateModule.init(RobotState);
+        estInitThisStep = true;
     }
 
     StateModule.set(RobotState);
@@ -579,6 +818,26 @@ void runControlPipeline(const ControllerConfig &controllerConfig,
     StateModule.setF(RobotState);
     StateModule.updateF();
     StateModule.getF(RobotState);
+    return estInitThisStep;
+}
+
+void runControlPipeline(const ControllerConfig &controllerConfig,
+                        DataBus &RobotState,
+                        Pin_KinDyn_V4_Leg &kinDynSolver,
+                        JoyStickInterpreter &jsInterp,
+                        GaitScheduler &gaitScheduler,
+                        FootPlacement &footPlacement,
+                        MPC &MPC_solv,
+                        WBC_priority_V4_Leg &WBC_solv,
+                        const Eigen::VectorXd &qIniDes,
+                        const Eigen::VectorXd &qIniLeg,
+                        double stand_legLength,
+                        double foot_height,
+                        int &mpcCtrlCount,
+                        int mpcCtrlDecimation,
+                        bool setIniWhenWalk2Stand,
+                        bool holdFixedStandPose)
+{
 
     if (setIniWhenWalk2Stand && RobotState.motionState == DataBus::Walk2Stand)
     {
@@ -751,6 +1010,15 @@ int runMujoco(const ControllerConfig &controllerConfig)
     {
         std::cout << "[AutoWalk] enabled, speed=" << autoWalkSpeed << " m/s" << std::endl;
     }
+    MujocoRegressionScript regressionScript = loadMujocoRegressionScriptFromEnv();
+    if (regressionScript.enabled)
+    {
+        std::cout << "[AutoRegression] enabled"
+                  << ", close_loop_t=" << regressionScript.tCloseLoop
+                  << ", walk_start_t=" << regressionScript.tWalkStart
+                  << ", stop_t=" << regressionScript.tPressJ
+                  << ", sim_end_t=" << regressionScript.simEndTime << std::endl;
+    }
 
     configureCommonLegModules(controllerConfig, gaitScheduler, footPlacement, WBC_solv, RobotState, stand_legLength);
 
@@ -773,9 +1041,14 @@ int runMujoco(const ControllerConfig &controllerConfig)
 
     int mainCtrlCount = mainCtrlDecimation - 1;
     int mpcCtrlCount = mpcCtrlDecimation - 1;
+    EstimatorTruthLog truthLog;
+    double truthBasePosW[3]{0.0, 0.0, 0.0};
+    double truthBaseVelW[3]{0.0, 0.0, 0.0};
+    double truthRpyW[3]{0.0, 0.0, 0.0};
+    std::vector<double> truthJointTor;
 
     bool openLoopPhaseActive = true;
-    double simEndTime = 200;
+    double simEndTime = regressionScript.enabled ? regressionScript.simEndTime : 200.0;
 
     mjtNum simstart = mj_data->time;
     double simTime = mj_data->time;
@@ -807,16 +1080,25 @@ int runMujoco(const ControllerConfig &controllerConfig)
             }
             mainCtrlCount = 0;
 
+            mj_interface.getTruthSnapshot(truthBasePosW, truthBaseVelW, truthRpyW, truthJointTor);
+            const bool estInitThisStep = runEstimationAndDynamics(RobotState, kinDynSolver, StateModule, simTime);
+            if (estInitThisStep)
+            {
+                truthLog.setReference(truthBasePosW, truthRpyW[2], RobotState.base_pos_est);
+            }
+
             buttonState = uiController.getButtonState();
+            regressionScript.inject(simTime, buttonState);
             applyLegControlStateMachine(controllerConfig, buttonState, RobotState, jsInterp, gaitScheduler,
                                         openLoopPhaseActive, autoWalkEnabled, autoWalkStarted, autoWalkSpeed,
                                         xv_des, xv_step, xv_max, xv_min, turnRateCmd, simTime);
 
-            runControlPipeline(controllerConfig, RobotState, kinDynSolver, StateModule,
+            runControlPipeline(controllerConfig, RobotState, kinDynSolver,
                                jsInterp, gaitScheduler, footPlacement, MPC_solv, WBC_solv,
                                qIniDes, resLeg.jointPosRes, stand_legLength, foot_height,
-                               simTime, mpcCtrlCount, mpcCtrlDecimation,
+                               mpcCtrlCount, mpcCtrlDecimation,
                                true, openLoopPhaseActive);
+            truthLog.update(RobotState, truthBasePosW, truthBaseVelW, truthRpyW);
 
             pvtCtr.dataBusRead(RobotState);
             if (openLoopPhaseActive)
@@ -847,7 +1129,7 @@ int runMujoco(const ControllerConfig &controllerConfig)
 
             mj_interface.setMotorsTorque(RobotState.motors_tor_out);
 
-            recordCommonLogger(logger, RobotState, simTime, mainCtrlDt, mpcCtrlDt);
+            recordCommonLogger(logger, RobotState, simTime, mainCtrlDt, mpcCtrlDt, truthLog);
         }
 
         if (mj_data->time >= simEndTime)
@@ -857,8 +1139,6 @@ int runMujoco(const ControllerConfig &controllerConfig)
     }
 
     uiController.Close();
-    mj_deleteData(mj_data);
-    mj_deleteModel(mj_model);
     return 0;
 }
 
@@ -913,6 +1193,7 @@ int runRos2Real(const ControllerConfig &controllerConfig)
     addCommonLoggerItems(logger, robot_nv);
 
     int mpcCtrlCount = mpcCtrlDecimation - 1;
+    EstimatorTruthLog truthLog;
     double ctrlTime = 0.0;
     bool openLoopPhaseActive = true;
     UIctr::ButtonState buttonState;
@@ -970,20 +1251,21 @@ int runRos2Real(const ControllerConfig &controllerConfig)
 
         ctrlTime += mainCtrlDt;
         ros2Interface.dataBusWrite(RobotState);
+        runEstimationAndDynamics(RobotState, kinDynSolver, StateModule, ctrlTime);
         buttonState = terminalKeyReader.poll();
 
         applyLegControlStateMachine(controllerConfig, buttonState, RobotState, jsInterp, gaitScheduler,
                                     openLoopPhaseActive, autoWalkEnabled, autoWalkStarted, autoWalkSpeed,
                                     xv_des, xv_step, xv_max, xv_min, turnRateCmd, ctrlTime);
 
-        runControlPipeline(controllerConfig, RobotState, kinDynSolver, StateModule,
+        runControlPipeline(controllerConfig, RobotState, kinDynSolver,
                            jsInterp, gaitScheduler, footPlacement, MPC_solv, WBC_solv,
                            qIniDes, resLeg.jointPosRes, stand_legLength, foot_height,
-                           ctrlTime, mpcCtrlCount, mpcCtrlDecimation,
+                           mpcCtrlCount, mpcCtrlDecimation,
                            true, openLoopPhaseActive);
 
         ros2Interface.setMotorsPosition(RobotState.motors_pos_des);
-        recordCommonLogger(logger, RobotState, ctrlTime, mainCtrlDt, mainCtrlDt * mpcCtrlDecimation);
+        recordCommonLogger(logger, RobotState, ctrlTime, mainCtrlDt, mainCtrlDt * mpcCtrlDecimation, truthLog);
 
         std::this_thread::sleep_until(nextTick);
     }

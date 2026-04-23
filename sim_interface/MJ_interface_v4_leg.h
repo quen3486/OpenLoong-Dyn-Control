@@ -15,6 +15,7 @@ public:
     std::vector<double> motor_pos;
     std::vector<double> motor_pos_Old;
     std::vector<double> motor_vel;
+    std::vector<double> motor_tor_mea_link;
     double rpy[3]{0};
     double yaw_simgle;
     int    yaw_N = 0;
@@ -42,6 +43,10 @@ public:
     void updateSensorValues();
     void setMotorsTorque(std::vector<double> &tauIn);
     void dataBusWrite(DataBus &busIn);
+    void getTruthSnapshot(double basePosOut[3],
+                          double baseLinVelOut[3],
+                          double rpyOut[3],
+                          std::vector<double> &jointTorOut) const;
 
 private:
     mjModel *mj_model;

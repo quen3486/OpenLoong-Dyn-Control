@@ -16,6 +16,7 @@ MJ_Interface_V4_Leg::MJ_Interface_V4_Leg(mjModel *mj_modelIn, mjData *mj_dataIn)
     motor_pos.assign(jointNum, 0);
     motor_vel.assign(jointNum, 0);
     motor_pos_Old.assign(jointNum, 0);
+    motor_tor_mea_link.assign(jointNum, 0);
     for (int i = 0; i < jointNum; i++)
     {
         int tmpId = mj_name2id(mj_model, mjOBJ_JOINT, JointName[i].c_str());
@@ -52,6 +53,7 @@ void MJ_Interface_V4_Leg::updateSensorValues()
         motor_pos_Old[i] = motor_pos[i];
         motor_pos[i] = mj_data->qpos[jntId_qpos[i]];
         motor_vel[i] = mj_data->qvel[jntId_qvel[i]];
+        motor_tor_mea_link[i] = mj_data->qfrc_actuator[jntId_qvel[i]];
     }
     for (int i = 0; i < 4; i++)
         baseQuat[i] = mj_data->sensordata[mj_model->sensor_adr[orientataionSensorId] + i];
@@ -102,21 +104,26 @@ void MJ_Interface_V4_Leg::dataBusWrite(DataBus &busIn)
 {
     busIn.motors_pos_cur = motor_pos;
     busIn.motors_vel_cur = motor_vel;
+    busIn.motors_tor_cur = motor_tor_mea_link;
     busIn.rpy[0] = rpy[0];
     busIn.rpy[1] = rpy[1];
     busIn.rpy[2] = rpy[2];
-    busIn.fL[0] = f3d[0][0];
-    busIn.fL[1] = f3d[1][0];
-    busIn.fL[2] = f3d[2][0];
-    busIn.fR[0] = f3d[0][1];
-    busIn.fR[1] = f3d[1][1];
-    busIn.fR[2] = f3d[2][1];
-    busIn.basePos[0] = basePos[0];
-    busIn.basePos[1] = basePos[1];
-    busIn.basePos[2] = basePos[2];
-    busIn.baseLinVel[0] = baseLinVel[0];
-    busIn.baseLinVel[1] = baseLinVel[1];
-    busIn.baseLinVel[2] = baseLinVel[2];
+    // Keep control input contract aligned with real robot sensors:
+    // IMU + joint states + measured joint torque.
+    // Base position/velocity and foot contact force are simulation truths and
+    // are intentionally not injected into controller input.
+    busIn.fL[0] = 0.0;
+    busIn.fL[1] = 0.0;
+    busIn.fL[2] = 0.0;
+    busIn.fR[0] = 0.0;
+    busIn.fR[1] = 0.0;
+    busIn.fR[2] = 0.0;
+    busIn.basePos[0] = 0.0;
+    busIn.basePos[1] = 0.0;
+    busIn.basePos[2] = 0.0;
+    busIn.baseLinVel[0] = 0.0;
+    busIn.baseLinVel[1] = 0.0;
+    busIn.baseLinVel[2] = 0.0;
     busIn.baseAcc[0] = baseAcc[0];
     busIn.baseAcc[1] = baseAcc[1];
     busIn.baseAcc[2] = baseAcc[2];
@@ -124,4 +131,18 @@ void MJ_Interface_V4_Leg::dataBusWrite(DataBus &busIn)
     busIn.baseAngVel[1] = baseAngVel[1];
     busIn.baseAngVel[2] = baseAngVel[2];
     busIn.updateQ();
+}
+
+void MJ_Interface_V4_Leg::getTruthSnapshot(double basePosOut[3],
+                                           double baseLinVelOut[3],
+                                           double rpyOut[3],
+                                           std::vector<double> &jointTorOut) const
+{
+    for (int i = 0; i < 3; i++)
+    {
+        basePosOut[i] = basePos[i];
+        baseLinVelOut[i] = baseLinVel[i];
+        rpyOut[i] = rpy[i];
+    }
+    jointTorOut = motor_tor_mea_link;
 }
