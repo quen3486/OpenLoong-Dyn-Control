@@ -85,6 +85,7 @@ bool loadControllerConfig(const std::string &jsonPath, ControllerConfig &outProf
 
     readOptionalDouble(root, "main_control_dt", outProfile.mainControlDt);
     readOptionalDouble(root, "mpc_control_dt", outProfile.mpcControlDt);
+    readOptionalDouble(root, "phase_transition_blend_time_sec", outProfile.phaseTransitionBlendTimeSec);
 
     readOptionalDouble(root, "t_swing", outProfile.tSwing);
     readOptionalDouble(root, "phi_switch_min", outProfile.phiSwitchMin);
@@ -173,6 +174,7 @@ bool loadControllerConfig(const std::string &jsonPath, ControllerConfig &outProf
     outProfile.fzStopThreshold = std::max(outProfile.fzStopThreshold, 0.0);
     outProfile.mainControlDt = std::clamp(outProfile.mainControlDt, 1e-4, 0.05);
     outProfile.mpcControlDt = std::clamp(outProfile.mpcControlDt, outProfile.mainControlDt, 0.5);
+    outProfile.phaseTransitionBlendTimeSec = std::clamp(outProfile.phaseTransitionBlendTimeSec, 0.0, 0.2);
     outProfile.stepHeight = std::max(outProfile.stepHeight, 0.0);
     outProfile.swingTrajectoryPhase = std::clamp(outProfile.swingTrajectoryPhase, 1e-4, 0.99);
     outProfile.swingTrajectoryWindow = std::max(outProfile.swingTrajectoryWindow, outProfile.swingTrajectoryPhase + 1e-3);

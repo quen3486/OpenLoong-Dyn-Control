@@ -10,6 +10,7 @@
   // ===== 控制循环频率 =====
   "main_control_dt": 0.001,      // 主控制链路周期(s)，默认1kHz
   "mpc_control_dt": 0.005,       // MPC求解周期(s)，默认200Hz
+  "phase_transition_blend_time_sec": 0.02, // Walk换相后命令平滑时间(s)，降低落脚冲击
 
   // ===== 步态调度（GaitScheduler） =====
   "t_swing": 0.4,                // 单步摆动时间(s)

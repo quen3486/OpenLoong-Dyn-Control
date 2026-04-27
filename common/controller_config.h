@@ -28,6 +28,7 @@ struct ControllerConfig
     // Control loop timing
     double mainControlDt{0.001};
     double mpcControlDt{0.005};
+    double phaseTransitionBlendTimeSec{0.02};
 
     // Gait scheduler / phase switching
     double tSwing{0.4};

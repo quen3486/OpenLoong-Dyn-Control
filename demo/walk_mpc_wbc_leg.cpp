@@ -112,22 +112,12 @@ struct MujocoRegressionScript
     double tCloseLoop{5.0};
     double tWalkStart{10.0};
     double tPressW{10.2};
-    double tPressA{13.0};
-    double tPressD{15.0};
-    double tPressQ{17.0};
-    double tPressE{19.0};
-    double tPressH{21.0};
     double tPressJ{26.0};
     double simEndTime{30.0};
 
     bool sentF{false};
     bool sentSpace{false};
     bool sentW{false};
-    bool sentA{false};
-    bool sentD{false};
-    bool sentQ{false};
-    bool sentE{false};
-    bool sentH{false};
     bool sentJ{false};
 
     void inject(double simTime, UIctr::ButtonState &button)
@@ -154,36 +144,6 @@ struct MujocoRegressionScript
             button.key_w = true;
             sentW = true;
             std::cout << "[AutoRegression] press W at t=" << simTime << " s" << std::endl;
-        }
-        if (!sentA && simTime >= tPressA)
-        {
-            button.key_a = true;
-            sentA = true;
-            std::cout << "[AutoRegression] press A at t=" << simTime << " s" << std::endl;
-        }
-        if (!sentD && simTime >= tPressD)
-        {
-            button.key_d = true;
-            sentD = true;
-            std::cout << "[AutoRegression] press D at t=" << simTime << " s" << std::endl;
-        }
-        if (!sentQ && simTime >= tPressQ)
-        {
-            button.key_q = true;
-            sentQ = true;
-            std::cout << "[AutoRegression] press Q at t=" << simTime << " s" << std::endl;
-        }
-        if (!sentE && simTime >= tPressE)
-        {
-            button.key_e = true;
-            sentE = true;
-            std::cout << "[AutoRegression] press E at t=" << simTime << " s" << std::endl;
-        }
-        if (!sentH && simTime >= tPressH)
-        {
-            button.key_h = true;
-            sentH = true;
-            std::cout << "[AutoRegression] press H at t=" << simTime << " s" << std::endl;
         }
         if (!sentJ && simTime >= tPressJ)
         {
@@ -219,11 +179,6 @@ MujocoRegressionScript loadMujocoRegressionScriptFromEnv()
 
     const double walkBase = script.tWalkStart;
     script.tPressW = walkBase + 0.2;
-    script.tPressA = walkBase + 3.0;
-    script.tPressD = walkBase + 5.0;
-    script.tPressQ = walkBase + 7.0;
-    script.tPressE = walkBase + 9.0;
-    script.tPressH = walkBase + 11.0;
 
     return script;
 }
@@ -348,6 +303,7 @@ struct EstimatorTruthLog
     double est_err_pos[3]{0.0, 0.0, 0.0};
     double est_err_vel[3]{0.0, 0.0, 0.0};
     double est_err_yaw{0.0};
+    double mujoco_touch_force[2]{0.0, 0.0};
 
     bool refReady{false};
     double p0_truth[3]{0.0, 0.0, 0.0};
@@ -363,6 +319,12 @@ struct EstimatorTruthLog
         }
         yaw0_truth = yawTruth;
         refReady = true;
+    }
+
+    void setMujocoTouchForces(double left, double right)
+    {
+        mujoco_touch_force[0] = left;
+        mujoco_touch_force[1] = right;
     }
 
     void update(const DataBus &robotState,
@@ -421,16 +383,19 @@ void addCommonLoggerItems(DataLogger &logger, int robot_nv)
     logger.addIterm("FL_est", 3);
     logger.addIterm("FR_est", 3);
     logger.addIterm("wbc_FrRes", 12);
+    logger.addIterm("Fr_ff", 12);
     logger.addIterm("base_pos_des", 3);
     logger.addIterm("base_pos", 3);
     logger.addIterm("base_pos_est", 3);
     logger.addIterm("baseLinVel", 3);
     logger.addIterm("base_vel_est", 3);
     logger.addIterm("base_rpy", 3);
+    logger.addIterm("base_omega_W", 3);
     logger.addIterm("eul_est", 3);
     logger.addIterm("truth_base_pos_w", 3);
     logger.addIterm("truth_base_vel_w", 3);
     logger.addIterm("truth_rpy_w", 3);
+    logger.addIterm("mujoco_touch_force", 2);
     logger.addIterm("truth_in_est_frame", 3);
     logger.addIterm("est_err_pos", 3);
     logger.addIterm("est_err_vel", 3);
@@ -447,6 +412,12 @@ void addCommonLoggerItems(DataLogger &logger, int robot_nv)
     logger.addIterm("js_omega_des", 3);
     logger.addIterm("swingDesPosCur_W", 3);
     logger.addIterm("swingDesPosFinal_W", 3);
+    logger.addIterm("fe_l_pos_W", 3);
+    logger.addIterm("fe_r_pos_W", 3);
+    logger.addIterm("hip_l_pos_W", 3);
+    logger.addIterm("hip_r_pos_W", 3);
+    logger.addIterm("swingStartPos_W", 3);
+    logger.addIterm("stanceDesPos_W", 3);
     logger.addIterm("qpStatus_MPC", 1);
     logger.addIterm("legState", 1);
     logger.addIterm("motionState", 1);
@@ -488,6 +459,9 @@ void recordCommonLogger(DataLogger &logger,
         truthLog.est_err_vel[0],
         truthLog.est_err_vel[1],
         truthLog.est_err_vel[2]};
+    double mujocoTouchLog[2] = {
+        truthLog.mujoco_touch_force[0],
+        truthLog.mujoco_touch_force[1]};
 
     logger.startNewLine();
     logger.recItermData("dyn_time", dynTime);
@@ -501,16 +475,19 @@ void recordCommonLogger(DataLogger &logger,
     logger.recItermData("FL_est", RobotState.FL_est);
     logger.recItermData("FR_est", RobotState.FR_est);
     logger.recItermData("wbc_FrRes", RobotState.wbc_FrRes);
+    logger.recItermData("Fr_ff", RobotState.Fr_ff);
     logger.recItermData("base_pos_des", RobotState.base_pos_des);
     logger.recItermData("base_pos", RobotState.base_pos);
     logger.recItermData("base_pos_est", RobotState.base_pos_est);
     logger.recItermData("baseLinVel", baseLinVelLog);
     logger.recItermData("base_vel_est", RobotState.base_vel_est);
     logger.recItermData("base_rpy", RobotState.base_rpy);
+    logger.recItermData("base_omega_W", RobotState.base_omega_W);
     logger.recItermData("eul_est", RobotState.eul_est);
     logger.recItermData("truth_base_pos_w", truthBasePosLog);
     logger.recItermData("truth_base_vel_w", truthBaseVelLog);
     logger.recItermData("truth_rpy_w", truthRpyLog);
+    logger.recItermData("mujoco_touch_force", mujocoTouchLog);
     logger.recItermData("truth_in_est_frame", truthInEstLog);
     logger.recItermData("est_err_pos", estErrPosLog);
     logger.recItermData("est_err_vel", estErrVelLog);
@@ -527,11 +504,114 @@ void recordCommonLogger(DataLogger &logger,
     logger.recItermData("js_omega_des", RobotState.js_omega_des);
     logger.recItermData("swingDesPosCur_W", RobotState.swingDesPosCur_W);
     logger.recItermData("swingDesPosFinal_W", RobotState.swingDesPosFinal_W);
+    logger.recItermData("fe_l_pos_W", RobotState.fe_l_pos_W);
+    logger.recItermData("fe_r_pos_W", RobotState.fe_r_pos_W);
+    logger.recItermData("hip_l_pos_W", RobotState.hip_l_pos_W);
+    logger.recItermData("hip_r_pos_W", RobotState.hip_r_pos_W);
+    logger.recItermData("swingStartPos_W", RobotState.swingStartPos_W);
+    logger.recItermData("stanceDesPos_W", RobotState.stanceDesPos_W);
     logger.recItermData("qpStatus_MPC", static_cast<double>(RobotState.qpStatus_MPC));
     logger.recItermData("legState", RobotState.legState);
     logger.recItermData("motionState", RobotState.motionState);
     logger.finishLine();
 }
+
+class PhaseTransitionCommandBlender
+{
+public:
+    explicit PhaseTransitionCommandBlender(double blendTimeSec)
+        : blendTimeSec_(std::clamp(blendTimeSec, 0.0, 0.2))
+    {
+    }
+
+    void reset()
+    {
+        active_ = false;
+        elapsed_ = 0.0;
+        hasLastCommand_ = false;
+        lastLegState_ = DataBus::DSt;
+        lastPosCommand_.clear();
+        lastTorCommand_.clear();
+        startPosCommand_.clear();
+        startTorCommand_.clear();
+    }
+
+    void apply(DataBus &state, double dt, bool enabled)
+    {
+        const bool validCommand = state.motors_pos_des.size() == state.motors_tor_des.size() &&
+                                  !state.motors_pos_des.empty();
+        const bool canBlend = enabled && state.motionState == DataBus::Walk && validCommand &&
+                              blendTimeSec_ > 0.0;
+
+        if (!canBlend)
+        {
+            active_ = false;
+            rememberCommand(state);
+            return;
+        }
+
+        const bool legSwitched = hasLastCommand_ &&
+                                 lastLegState_ != DataBus::DSt &&
+                                 state.legState != DataBus::DSt &&
+                                 state.legState != lastLegState_;
+        if (legSwitched)
+        {
+            startPosCommand_ = lastPosCommand_;
+            startTorCommand_ = lastTorCommand_;
+            elapsed_ = 0.0;
+            active_ = startPosCommand_.size() == state.motors_pos_des.size() &&
+                      startTorCommand_.size() == state.motors_tor_des.size();
+        }
+
+        if (active_)
+        {
+            const std::vector<double> targetPos = state.motors_pos_des;
+            const std::vector<double> targetTor = state.motors_tor_des;
+            const double ratio = std::clamp(elapsed_ / blendTimeSec_, 0.0, 1.0);
+            const double alpha = ratio * ratio * (3.0 - 2.0 * ratio);
+            for (size_t i = 0; i < targetPos.size(); ++i)
+            {
+                state.motors_pos_des[i] = (1.0 - alpha) * startPosCommand_[i] + alpha * targetPos[i];
+                state.motors_tor_des[i] = (1.0 - alpha) * startTorCommand_[i] + alpha * targetTor[i];
+            }
+
+            elapsed_ += std::max(dt, 0.0);
+            if (elapsed_ >= blendTimeSec_)
+            {
+                active_ = false;
+            }
+        }
+
+        rememberCommand(state);
+    }
+
+private:
+    void rememberCommand(const DataBus &state)
+    {
+        if (state.motors_pos_des.size() == state.motors_tor_des.size() &&
+            !state.motors_pos_des.empty())
+        {
+            lastPosCommand_ = state.motors_pos_des;
+            lastTorCommand_ = state.motors_tor_des;
+            hasLastCommand_ = true;
+        }
+        else
+        {
+            hasLastCommand_ = false;
+        }
+        lastLegState_ = state.legState;
+    }
+
+    double blendTimeSec_{0.0};
+    double elapsed_{0.0};
+    bool active_{false};
+    bool hasLastCommand_{false};
+    DataBus::LegState lastLegState_{DataBus::DSt};
+    std::vector<double> lastPosCommand_;
+    std::vector<double> lastTorCommand_;
+    std::vector<double> startPosCommand_;
+    std::vector<double> startTorCommand_;
+};
 
 class TerminalKeyReader
 {
@@ -1309,6 +1389,7 @@ int runMujoco(const ControllerConfig &controllerConfig)
     PVT_Ctr_V4_Leg pvtCtr(mainCtrlDt, "../common/joint_ctrl_config_v4_leg.json");
     FootPlacement footPlacement;
     JoyStickInterpreter jsInterp(mainCtrlDt);
+    PhaseTransitionCommandBlender commandBlender(controllerConfig.phaseTransitionBlendTimeSec);
     DataLogger logger("../record/datalog.log");
     StateEst StateModule(mainCtrlDt);
     ROS2_StatePub_V4_Leg simRos2StatePub;
@@ -1359,6 +1440,7 @@ int runMujoco(const ControllerConfig &controllerConfig)
     if (regressionScript.enabled)
     {
         std::cout << "[AutoRegression] enabled"
+                  << " (straight walking: F -> Space -> W -> J)"
                   << ", close_loop_t=" << regressionScript.tCloseLoop
                   << ", walk_start_t=" << regressionScript.tWalkStart
                   << ", stop_t=" << regressionScript.tPressJ
@@ -1445,7 +1527,9 @@ int runMujoco(const ControllerConfig &controllerConfig)
                                qIniDes, resLeg.jointPosRes, stand_legLength, foot_height,
                                mpcCtrlCount, mpcCtrlDecimation,
                                true, openLoopPhaseActive);
+            commandBlender.apply(RobotState, mainCtrlDt, !openLoopPhaseActive);
             truthLog.update(RobotState, truthBasePosW, truthBaseVelW, truthRpyW);
+            truthLog.setMujocoTouchForces(mj_interface.f3d[2][0], mj_interface.f3d[2][1]);
 
             pvtCtr.dataBusRead(RobotState);
             if (openLoopPhaseActive)
@@ -1553,6 +1637,7 @@ int runRos2Real(const ControllerConfig &controllerConfig)
 
     int mpcCtrlCount = mpcCtrlDecimation - 1;
     EstimatorTruthLog truthLog;
+    PhaseTransitionCommandBlender commandBlender(controllerConfig.phaseTransitionBlendTimeSec);
     double ctrlTime = 0.0;
     bool openLoopPhaseActive = true;
     bool publishEnabled = false;
@@ -1591,6 +1676,7 @@ int runRos2Real(const ControllerConfig &controllerConfig)
         jsInterp.setVyDesLPara(0.0, controllerConfig.vxStopRampTime);
         jsInterp.setWzDesLPara(0.0, controllerConfig.wzStopRampTime);
         safetyMonitor.resetCommandHistory();
+        commandBlender.reset();
     };
 
     auto stopPublishingForSafety = [&](const std::string &reason)
@@ -1632,6 +1718,7 @@ int runRos2Real(const ControllerConfig &controllerConfig)
                 autoWalkStarted = false;
                 jsInterp.reset();
                 safetyMonitor.resetCommandHistory();
+                commandBlender.reset();
                 std::cout << "[PublishGate-Real] control publishing enabled by G. Open-loop stand command active." << std::endl;
             }
         }
@@ -1696,6 +1783,7 @@ int runRos2Real(const ControllerConfig &controllerConfig)
                            qIniDes, resLeg.jointPosRes, stand_legLength, foot_height,
                            mpcCtrlCount, mpcCtrlDecimation,
                            true, openLoopPhaseActive);
+        commandBlender.apply(RobotState, mainCtrlDt, !openLoopPhaseActive);
 
         if (!safetyMonitor.validateCommandAndRemember(RobotState,
                                                       RobotState.motors_pos_des,
