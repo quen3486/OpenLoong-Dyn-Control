@@ -5,13 +5,17 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd -- "${SCRIPT_DIR}/.." && pwd)"
 BUILD_DIR="${REPO_ROOT}/build"
 
-# 统一模式： mujoco / mujoco_ros2 / ros2_real
-MODE="${CONTROL_MODE:-${OPENLOONG_CONTROL_MODE:-mujoco_ros2}}"
+# 默认入口用于真机：ros2_real + leg + RViz + no AUTOWALK.
+# 显式设置 CONTROL_MODE=mujoco/mujoco_ros2 时仍可用于仿真回归。
+MODE="${CONTROL_MODE:-${OPENLOONG_CONTROL_MODE:-ros2_real}}"
 # 机器人版本切换：v4 / leg （兼容旧变量 TARGET）
 ROBOT_VARIANT="${ROBOT_VARIANT:-${TARGET:-leg}}"
 SIM_PUB_DT="${SIM_ROS_PUBLISH_DT:-${OPENLOONG_SIM_ROS_PUBLISH_DT:-0.01}}"
 
-if [ -n "${START_RVIZ-}" ]; then
+if [ "${MODE}" = "ros2_real" ]; then
+  ROBOT_VARIANT="leg"
+  START_RVIZ="1"
+elif [ -n "${START_RVIZ-}" ]; then
   START_RVIZ="${START_RVIZ}"
 elif [ -n "${OPENLOONG_START_RVIZ-}" ]; then
   START_RVIZ="${OPENLOONG_START_RVIZ}"
@@ -22,6 +26,9 @@ else
 fi
 
 AUTO_WALK="${AUTOWALK:-0}"
+if [ "${MODE}" = "ros2_real" ]; then
+  AUTO_WALK="0"
+fi
 
 case "${ROBOT_VARIANT}" in
   v4)
@@ -46,6 +53,12 @@ BIN_PATH="${BUILD_DIR}/${BIN_NAME}"
 CFG_PATH="${OPENLOONG_CONTROLLER_CONFIG:-${CFG_DEFAULT}}"
 RVIZ_CFG_PATH="${OPENLOONG_RVIZ_CONFIG:-${RVIZ_CFG_DEFAULT}}"
 RVIZ_URDF_PATH="${OPENLOONG_ROBOT_URDF:-${RVIZ_URDF_DEFAULT}}"
+
+if [ "${MODE}" = "ros2_real" ]; then
+  CFG_PATH="${CFG_DEFAULT}"
+  RVIZ_CFG_PATH="${RVIZ_CFG_DEFAULT}"
+  RVIZ_URDF_PATH="${RVIZ_URDF_DEFAULT}"
+fi
 
 # 目前 ros2_real 仅支持 leg；mujoco_ros2 支持 v4/leg
 if [ "${MODE}" = "ros2_real" ] && [ "${ROBOT_VARIANT}" != "leg" ]; then
@@ -96,6 +109,9 @@ echo "[Control] mode   : ${MODE}"
 echo "[Control] variant: ${ROBOT_VARIANT}"
 echo "[Control] binary : ${BIN_PATH}"
 echo "[Control] config : ${CFG_PATH}"
+if [ "${MODE}" = "ros2_real" ]; then
+  echo "[Control] real   : fixed leg + RViz + AUTOWALK=0; press G in the controller terminal to publish"
+fi
 
 RVIZ_SCRIPT="${REPO_ROOT}/tools/real_robot/start_rviz_real_leg.sh"
 RVIZ_PID=""

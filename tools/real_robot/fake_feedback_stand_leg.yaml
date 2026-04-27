@@ -20,7 +20,7 @@ meta:
 ros_topics:
   imu: /imu/data
   joint_states: /joint_states
-  action_cmd: /rl_motion_control_command
+  action_cmd: /rl_motion_control_command_with_torque
 
 imu_msg:
   orientation:

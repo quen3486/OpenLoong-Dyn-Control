@@ -1,3 +1,4 @@
+<!-- From: /home/huangkun/workspaces/mpc/Openloong-dyn-control/AGENTS.md -->
 # OpenLoong Dynamics Control - AGENTS 指南（基于当前仓库实况）
 
 ## 0. 文档目的
@@ -15,13 +16,13 @@
 
 ## 1. 项目概览
 
-OpenLoong Dynamics Control 是一个基于 **MPC（Model Predictive Control）+ WBC（Whole Body Control）** 的仿人机器人运动控制框架，运行在 **MuJoCo** 仿真环境。
+OpenLoong Dynamics Control 是一个基于 **MPC（Model Predictive Control）+ WBC（Whole Body Control）** 的仿人机器人运动控制框架，运行在 **MuJoCo** 仿真环境。支持 MuJoCo 仿真、MuJoCo+ROS2 联合仿真、以及 ROS2 真机控制三种运行模式。
 
 当前仓库内主线功能是行走控制（含键盘交互）。控制链路核心为：
 
 `MuJoCo 传感器 -> DataBus -> 状态估计/动力学/MPC/WBC -> PVT -> MuJoCo 电机力矩`
 
-当前 `CMakeLists.txt` 实际构建 4 个可执行文件：
+当前 `CMakeLists.txt` 实际构建 4 个仿真可执行文件：
 
 - `walk_wbc_joystick`
 - `walk_mpc_wbc_joystick`
@@ -39,6 +40,7 @@ OpenLoong Dynamics Control 是一个基于 **MPC（Model Predictive Control）+ 
 - 语言：`C++17`
 - 构建系统：`CMake >= 3.10`
 - 默认构建类型：`Release`（若未显式指定）
+- 编译选项：`add_compile_options(-std=c++17)`
 
 ### 2.2 依赖来源
 
@@ -62,17 +64,24 @@ OpenLoong Dynamics Control 是一个基于 **MPC（Model Predictive Control）+ 
   - x64：`third_party/mujoco/lin_x64`, `third_party/qpOASES/lin_x64`
   - arm64：`third_party/mujoco/lin_arm64`, `third_party/qpOASES/lin_arm64`
 
+### 2.4 ROS2 可选依赖
+
+CMake 中 `OPENLOONG_ENABLE_ROS2` 默认为 `ON`：
+- 若系统已安装 ROS2（`rclcpp`, `sensor_msgs`, `std_msgs`, `geometry_msgs`），则自动启用 ROS2 接口编译（`sim_interface/ROS2_interface_v4_leg.cpp`, `ROS2_state_pub_v4*.cpp`）。
+- 若未找到 ROS2，则自动退化为纯仿真编译，并过滤掉 ROS2 源文件。
+- `tf2_ros` 为可选依赖；找到后会定义 `OPENLOONG_HAS_TF2=1`。
+
 ---
 
 ## 3. 关键配置文件（实际存在）
 
-## 3.1 构建与仓库级配置
+### 3.1 构建与仓库级配置
 
 - `CMakeLists.txt`：唯一主构建配置。
-- `.gitignore`：忽略 `build/`、`record/datalog.log`、`*.out` 等。
+- `.gitignore`：忽略 `build/`、`record/datalog.log`、`*.out`、IDE 目录等。
 - `license`：Apache 2.0。
 
-## 3.2 控制参数配置
+### 3.2 控制参数配置
 
 - `common/joint_ctrl_config.json`（AzureLoong）
 - `common/joint_ctrl_config_v4.json`（speedbot_v4）
@@ -80,7 +89,23 @@ OpenLoong Dynamics Control 是一个基于 **MPC（Model Predictive Control）+ 
 
 每个关节含 `kp/kd/maxPos/minPos/maxSpeed/maxTorque/PVT_LPF_Fc/gear`。
 
-## 3.3 机型与场景配置
+### 3.3 运行时控制器配置（JSON）
+
+- `common/controller_config_azure.json`
+- `common/controller_config_v4.json`
+- `common/controller_config_v4_leg.json`
+- `common/controller_config_v4_slow.json`
+
+由 `common/controller_config.cpp/h` 提供统一的 `ControllerConfig` 结构体与 `loadControllerConfig()` 加载接口。支持 JSON 注释（`//` 与 `/* */`），便于在配置文件中写调参说明。运行时可通过环境变量 `OPENLOONG_CONTROLLER_CONFIG` 指定加载路径；demo 主循环中按机型默认加载对应配置。
+
+主要可调字段示例：
+- `controlBackend` / `mainControlDt` / `mpcControlDt`
+- `tSwing` / `phiSwitchMin` / `fzSwitchThreshold`
+- `kpVx` / `kpVy` / `stepHeight`
+- `posRotKp` / `swingLegKp` / `contactMiu`
+- `mpcMass` / `mpcPredictionHorizon` / `mpcUseDataBusInertia`
+
+### 3.4 机型与场景配置
 
 - 场景入口：
   - `models/scene.xml`
@@ -96,14 +121,14 @@ OpenLoong Dynamics Control 是一个基于 **MPC（Model Predictive Control）+ 
   - `models/speedbot_v4/speedbot_v4.urdf`
   - `models/speedbot_v4/speedbot_v4_leg.urdf`
 
-## 3.4 数据与后处理
+### 3.5 数据与后处理
 
 - `record/datalog.log`：运行日志（体积可能很大）。
 - `record/matlabReadDataScript.txt`：由 `DataLogger` 自动生成列索引脚本。
 - `record/plotData.m`：示例绘图。
 - `record/exportVideo.txt`：`ffmpeg` 原始帧转视频命令。
 
-## 3.5 关键“缺失项”（明确不存在）
+### 3.6 关键“缺失项”（明确不存在）
 
 本仓库当前没有以下生态配置：
 
@@ -113,12 +138,13 @@ OpenLoong Dynamics Control 是一个基于 **MPC（Model Predictive Control）+ 
 - `go.mod`
 - `requirements.txt`
 - `.github/workflows/*`（无 CI 工作流目录）
+- `Makefile`（顶层无手写 Makefile，仅 CMake 生成）
 
 ---
 
 ## 4. 构建、测试与运行命令
 
-## 4.1 环境准备（README）
+### 4.1 环境准备（README）
 
 ```bash
 sudo apt-get update
@@ -126,14 +152,25 @@ sudo apt install git cmake gcc-11 g++-11
 sudo apt install libglu1-mesa-dev freeglut3-dev
 ```
 
-## 4.2 构建（已在本地验证可通过）
+若需 ROS2 支持，额外安装 ROS2 Humble 并 source `/opt/ros/humble/setup.bash`。
+
+### 4.2 构建（已在本地验证可通过）
 
 ```bash
 cmake -S . -B build
 cmake --build build -j4
 ```
 
-## 4.3 运行
+构建产物：
+- `build/libcore.a`：静态库（由 `algorithm/*.cpp`, `common/*.cpp`, `math/*.cpp`, `sim_interface/*.cpp` 自动聚合）。
+- `build/walk_wbc_joystick`
+- `build/walk_mpc_wbc_joystick`
+- `build/walk_mpc_wbc_v4`
+- `build/walk_mpc_wbc_leg`
+
+### 4.3 运行
+
+**直接运行（纯 MuJoCo 仿真）**
 
 ```bash
 cd build
@@ -143,7 +180,38 @@ cd build
 ./walk_mpc_wbc_leg
 ```
 
-## 4.4 测试状态
+**统一启动脚本（推荐，支持模式切换）**
+
+```bash
+# 纯 MuJoCo 仿真（v4）
+CONTROL_MODE=mujoco ROBOT_VARIANT=v4 ./tools/start_control_v4_leg.sh
+
+# MuJoCo + ROS2 状态发布 + RViz（v4）
+CONTROL_MODE=mujoco_ros2 ROBOT_VARIANT=v4 START_RVIZ=1 ./tools/start_control_v4_leg.sh
+
+# MuJoCo + ROS2 状态发布 + RViz（leg）
+CONTROL_MODE=mujoco_ros2 ROBOT_VARIANT=leg START_RVIZ=1 ./tools/start_control_v4_leg.sh
+
+# 真机模式（leg 机型）
+CONTROL_MODE=ros2_real ROBOT_VARIANT=leg ./tools/start_control_v4_leg.sh
+```
+
+脚本会自动检测二进制是否存在，不存在则触发构建；自动根据 `ROBOT_VARIANT` 选择对应配置与 URDF。
+
+**常用运行时环境变量**
+
+| 环境变量 | 说明 | 默认值 |
+|---|---|---|
+| `CONTROL_MODE` | `mujoco` / `mujoco_ros2` / `ros2_real` | `mujoco_ros2` |
+| `ROBOT_VARIANT` | `v4` / `leg` | `leg` |
+| `OPENLOONG_CONTROLLER_CONFIG` | 控制器 JSON 配置路径 | 按机型默认 |
+| `AUTOWALK` | 自动起步（`1/0`） | `0` |
+| `START_RVIZ` | 是否启动 RViz | `1`（ROS2 模式） |
+| `SIM_ROS_PUBLISH_DT` | ROS2 状态发布周期 | `0.01` |
+| `OPENLOONG_ROS_TOPIC_IMU` | IMU 话题名 | `/imu/data` |
+| `OPENLOONG_ROS_TOPIC_JOINT_STATES` | 关节状态话题名 | `/joint_states` |
+
+### 4.4 测试状态
 
 ```bash
 cd build
@@ -152,13 +220,13 @@ ctest -N
 
 当前结果：`Total Tests: 0`。
 
-结论：仓库无自动化单元/集成测试注册，主要依赖仿真回归和日志分析。
+结论：仓库无自动化单元/集成测试注册，主要依赖仿真回归和日志分析。`tools/validation/` 目录下提供了若干 shell 脚本用于分阶段回归验证（如 `generate_leg_stage_compare_report.sh`、`run_leg_noise_delay_sweep.sh`、`check_ros2_real_leg_contract.sh`），但均为外部调用型脚本，未接入 CMake/ctest。
 
 ---
 
 ## 5. 运行时架构（必须掌握）
 
-## 5.1 数据总线模式
+### 5.1 数据总线模式
 
 项目核心是 `DataBus`（`common/data_bus.h`），几乎所有算法模块通过它交换状态与控制量。
 
@@ -175,12 +243,13 @@ ctest -N
 9. `MJ_Interface*.setMotorsTorque()` 下发到 MuJoCo；
 10. `DataLogger` 记录一帧数据。
 
-## 5.2 主循环频率结构
+### 5.2 主循环频率结构
 
 - 物理步进：MuJoCo `timestep`（模型中通常 `0.001s`，即 1kHz）。
 - 渲染更新：外层 60 FPS 循环（`1.0/60.0`）。
+- MPC 控制周期：通常 `0.005s`（每 5 个主循环周期执行一次）。
 
-## 5.3 UI/键盘处理
+### 5.3 UI/键盘处理
 
 `sim_interface/GLFW_callbacks.*` 中统一管理：
 
@@ -194,7 +263,7 @@ ctest -N
   - `W/A/S/D/H`（基础）
   - `J/Q/E`（仅 v4/v4_leg demo 额外实现）
 
-### 5.3.1 各 demo 键位差异（精确）
+#### 5.3.1 各 demo 键位差异（精确）
 
 1. `walk_wbc_joystick`、`walk_mpc_wbc_joystick`（AzureLoong）
    - `W` 前进
@@ -212,32 +281,33 @@ ctest -N
    - `H` 重置航向参考
    - `Space` 走行/站立切换
 
-### 5.3.2 demo 与模型/场景映射
+#### 5.3.2 demo 与模型/场景映射
 
-| 可执行文件 | 场景 XML | URDF | 接口实现 |
-|---|---|---|---|
-| `walk_wbc_joystick` | `models/scene_board.xml` | `models/AzureLoong.urdf` | 无后缀版本 |
-| `walk_mpc_wbc_joystick` | `models/scene.xml` | `models/AzureLoong.urdf` | 无后缀版本 |
-| `walk_mpc_wbc_v4` | `models/scene_v4.xml` | `models/speedbot_v4/speedbot_v4.urdf` | `_v4` |
-| `walk_mpc_wbc_leg` | `models/scene_v4_leg.xml` | `models/speedbot_v4/speedbot_v4_leg.urdf` | `_v4_leg` |
+| 可执行文件 | 场景 XML | URDF | 接口实现 | 默认配置 |
+|---|---|---|---|---|
+| `walk_wbc_joystick` | `models/scene_board.xml` | `models/AzureLoong.urdf` | 无后缀 | `controller_config_azure.json` |
+| `walk_mpc_wbc_joystick` | `models/scene.xml` | `models/AzureLoong.urdf` | 无后缀 | `controller_config_azure.json` |
+| `walk_mpc_wbc_v4` | `models/scene_v4.xml` | `models/speedbot_v4/speedbot_v4.urdf` | `_v4` | `controller_config_v4.json` |
+| `walk_mpc_wbc_leg` | `models/scene_v4_leg.xml` | `models/speedbot_v4/speedbot_v4_leg.urdf` | `_v4_leg` | `controller_config_v4_leg.json` |
 
 ---
 
 ## 6. 代码组织与主模块划分
 
-## 6.1 目录分层
+### 6.1 目录分层
 
 - `demo/`：程序入口与控制主循环
-- `sim_interface/`：MuJoCo 与 GLFW 接口层
+- `sim_interface/`：MuJoCo 与 GLFW 接口层；ROS2 状态发布与真机接口
 - `algorithm/`：估计、MPC、WBC、步态与落脚规划
-- `common/`：DataBus、PVT、日志
+- `common/`：DataBus、PVT、日志、控制器配置加载
 - `math/`：矩阵工具、滤波器、轨迹生成
 - `models/`：URDF/XML/mesh/场景
 - `third_party/`：第三方依赖
 - `record/`：日志与后处理脚本
 - `ref/`：迁移参考资产（不参与当前 CMake 构建）
+- `tools/`：启动脚本、验证工具、真机/ROS2 辅助配置
 
-## 6.2 核心类与职责
+### 6.2 核心类与职责
 
 - `DataBus`：全局状态/命令总线。
 - `MJ_Interface / MJ_Interface_V4 / MJ_Interface_V4_Leg`：
@@ -252,8 +322,9 @@ ctest -N
 - `JoyStickInterpreter`：速度指令斜坡化与世界系积分。
 - `PVT_Ctr*`：关节级 PVT（PD + FF + 滤波 + 饱和）。
 - `DataLogger`：CSV 风格数值日志和 Matlab 脚本生成。
+- `ControllerConfig` + `loadControllerConfig()`：统一 JSON 配置加载。
 
-## 6.3 WBC 任务优先级（当前代码）
+### 6.3 WBC 任务优先级（当前代码）
 
 `wbc_priority*.cpp` 中构建的任务顺序如下（调参前先确认对应机型）：
 
@@ -290,7 +361,7 @@ ctest -N
 
 ## 8. 开发约定（按仓库实际行为）
 
-## 8.1 模块接口习惯
+### 8.1 模块接口习惯
 
 算法模块普遍遵循：
 
@@ -300,7 +371,7 @@ ctest -N
 
 这是本仓库最稳定的“读-算-写”组织方式。
 
-## 8.2 命名一致性要求（非常关键）
+### 8.2 命名一致性要求（非常关键）
 
 关节命名必须在以下位置保持一致：
 
@@ -316,7 +387,7 @@ ctest -N
 - 构造阶段 `not found in the XML file!` 并 `std::terminate()`；
 - 或控制阶段索引/参数错位。
 
-## 8.3 机型扩展约定
+### 8.3 机型扩展约定
 
 `model_migration_memory.md` 与 `Tutorial.md` 一致建议：
 
@@ -324,7 +395,7 @@ ctest -N
 - 新增对应 `MJ_interface_xxx / pino_kin_dyn_xxx / wbc_priority_xxx / PVT_ctrl_xxx / joint_ctrl_config_xxx.json / demo`；
 - 在 CMake 中新增 target，保持旧 target 可回归。
 
-## 8.4 CMake 组织细节
+### 8.4 CMake 组织细节
 
 `CMakeLists.txt` 使用 `file(GLOB ... algorithm/*.cpp common/*.cpp math/*.cpp sim_interface/*.cpp)` 汇总到 `core` 静态库。
 
@@ -333,22 +404,45 @@ ctest -N
 - 在这些目录新增 `.cpp` 文件通常会自动进入 `core`；
 - 新 demo 仍需手动 `add_executable + target_link_libraries`。
 
-## 8.5 注释与文档语言
+### 8.5 代码风格与命名规范
 
 - 仓库文档（README/Tutorial/迁移记忆）以中文为主；
 - 代码注释中英文混合，英文较多；
-- 若新增注释，优先保证团队可读性与术语一致性。
+- 若新增注释，优先保证团队可读性与术语一致性；
+- 变量命名常见前后缀含义（来自 README）：
+
+| 前缀后缀 | 指代 |
+|---|---|
+| `_L`, `_W` | 本体坐标系下、世界坐标系下 |
+| `fe_` | 足末端（foot-end） |
+| `_L`, `_l`, `_R`, `_r` | 左侧、右侧 |
+| `swing`, `sw` | 摆动腿 |
+| `stance`, `st` | 支撑腿 |
+| `eul`, `rpy` | 姿态角 |
+| `omega` | 角速度 |
+| `pos` | 位置 |
+| `vel` | 线速度 |
+| `tor`, `tau` | 力矩 |
+| `base` | BaseLink |
+| `_des` | 期望值 |
+| `_cur` | 当前实际值 |
+| `_rot` | 坐标变换矩阵 |
+
+### 8.6 配置文件编码
+
+- JSON 配置文件允许 C 风格注释（`//` 与 `/* */`），由 `jsoncpp` 的 `allowComments=true` 支持；
+- 建议在调参时保留注释说明修改原因与预期效果。
 
 ---
 
 ## 9. 测试与验证策略（当前实际）
 
-## 9.1 自动化测试
+### 9.1 自动化测试
 
 - 当前无 `add_test(...)`、无 gtest/pytest、无 CI workflow。
 - `ctest -N` 为 0。
 
-## 9.2 建议的最小人工回归流程
+### 9.2 建议的最小人工回归流程
 
 1. 全量构建通过（4 个可执行文件全部生成）。
 2. 至少运行你改动影响的 demo（建议 20~30s）。
@@ -361,7 +455,13 @@ ctest -N
    - `record/matlabReadDataScript.txt` 是否可对应新字段。
 5. 涉及多机型公共逻辑时，执行 Azure 与 v4 至少各 1 条 demo 回归。
 
-## 9.3 v4 调参参考
+### 9.3 验证工具（`tools/validation/`）
+
+- `generate_leg_stage_compare_report.sh`：对比 Stage1/2/3 日志，输出关键指标报告（est_err、qpStatus、motionState 分布等）。
+- `check_ros2_real_leg_contract.sh`：核对真机数据合约（话题名、动作长度、DataBus 输入合规性）。
+- `run_leg_noise_delay_sweep.sh`：批量噪声/延迟参数扫描实验。
+
+### 9.4 v4 调参参考
 
 `model_migration_memory.md`（第 8 节）已给出稳定性优化思路与验收指标，可直接复用做 A/B 评估。
 
@@ -375,18 +475,19 @@ ctest -N
 
 1. 本地 CMake 构建；
 2. 直接运行 `build/` 下 demo 二进制；
-3. 用 `record/` 输出做结果分析。
+3. 用 `record/` 输出做结果分析；
+4. 真机部署时通过 `tools/start_control_v4_leg.sh` 统一入口启动，配合 ROS2 话题收发。
 
 ---
 
 ## 11. 安全与稳定性注意事项
 
-## 11.1 控制与参数安全
+### 11.1 控制与参数安全
 
 - `PVT_Ctr*` 有力矩限幅（`maxTorque`）与低通，但高增益仍可能导致仿真不稳定。
 - `calMotorsPVT(deltaP_Lim)` 仅在部分阶段使用位置增量限幅，常规控制无该保护。
 
-## 11.2 已知鲁棒性风险点
+### 11.2 已知鲁棒性风险点
 
 1. `setJointPD(...)`（`common/PVT_ctrl*.cpp`）
    - 关节名未找到时仅打印 `NOT found!`，但仍会以 `id=-1` 写数组，存在越界风险。
@@ -398,7 +499,7 @@ ctest -N
 3. MPC 参数硬编码
    - `algorithm/mpc.cpp` 中质量/惯量等参数部分硬编码，跨机型调参需谨慎（`model_migration_memory.md` 已强调）。
 
-## 11.3 日志与资源
+### 11.3 日志与资源
 
 - `record/datalog.log` 可快速增大（当前仓库已有超大日志文件示例）。
 - 开启原始帧录制会生成很大 `.out` 文件，导出视频前先确认磁盘空间。
@@ -590,5 +691,8 @@ logger.addIterm("phi", 1);           // 相位
 - `README.md`：项目介绍与基础使用
 - `Tutorial.md`：模型替换方法
 - `model_migration_memory.md`：机型迁移与 v4 调优记忆
+- `tools/validation/README.md`：leg 迁移验证工具使用说明
+- `tools/real_robot/README.md`：真机模式 RViz 使用说明
+- `tools/sim_ros2/README.md`：MuJoCo 仿真 ROS2 状态发布说明
 - API 文档：https://www.openloong.org.cn/pages/api/html/index.html
 - Wiki：https://www.openloong.org.cn/pages/wiki/html/index.html

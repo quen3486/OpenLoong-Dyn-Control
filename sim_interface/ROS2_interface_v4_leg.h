@@ -1,7 +1,7 @@
 /*
  * ROS2 interface for speedbot_v4 leg-only real robot backend.
- * It subscribes IMU/joint state feedback and publishes 12-leg action commands
- * in the same topic layout as the RL deployment pipeline.
+ * It subscribes IMU/joint state feedback and publishes the RL deployment
+ * action layout: 29 position targets plus 29 torque feedforward values.
  */
 #pragma once
 
@@ -37,7 +37,8 @@ public:
     bool hasFreshData(double timeoutSec) const;
 
     void dataBusWrite(DataBus &busIn);
-    void setMotorsPosition(const std::vector<double> &qDesIn);
+    void setMotorsCommand(const std::vector<double> &qDesIn,
+                          const std::vector<double> &tauFfIn);
 
 private:
 #if OPENLOONG_HAS_ROS2

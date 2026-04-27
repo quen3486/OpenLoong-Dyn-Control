@@ -1,42 +1,42 @@
-# 真机模式 RViz 使用说明（speedbot_v4_leg）
+# 真机模式使用说明（speedbot_v4_leg）
 
-当前已统一为单一启动脚本：`tools/start_control_v4_leg.sh`。
+真机控制只保留一个统一入口：`tools/start_control_v4_leg.sh`。脚本默认固定为 `ros2_real + leg + RViz + AUTOWALK=0`。
 
-## 1. 统一入口
+## 1. 启动
 
 ```bash
 cd /home/huangkun/workspaces/mpc/Openloong-dyn-control
-CONTROL_MODE=ros2_real START_RVIZ=1 ./tools/start_control_v4_leg.sh
+./tools/start_control_v4_leg.sh
 ```
 
-- 控制入口仍是原 demo：`build/walk_mpc_wbc_leg`
-- 默认配置统一使用：`common/controller_config_v4_leg.json`
-- 不再依赖独立的 `*_real.json` 启动配置
+- 控制入口：`build/walk_mpc_wbc_leg`
+- 配置文件：`common/controller_config_v4_leg.json`
+- 关节限制与 PVT 安全估算参数：`common/joint_ctrl_config_v4_leg.json`
+- 启动后默认只订阅数据，不发布控制命令；按 `G` 才开始发布，再按 `G` 立即停发。
+- 按 `G` 开始发布后仍处于开环站姿；确认落地稳定后再按 `F` 进入闭环站立。
 
-## 2. 话题约定（与真机驱动一致）
+## 2. 话题约定
 
 - IMU：`/imu/data`
 - 关节状态：`/joint_states`
-- 动作命令：`/rl_motion_control_command`
+- 动作命令：`/rl_motion_control_command_with_torque`
 
-## 3. RViz 单独启动
+动作命令类型为 `std_msgs/msg/Float64MultiArray`，长度固定 `58`：前 `29` 位为位置目标，后 `29` 位为力矩前馈。当前 leg 控制器只写入前 12 个腿部位置和 `29..40` 的腿部 WBC 力矩前馈，上肢位置与力矩均填 `0.0`。
 
-```bash
-cd /home/huangkun/workspaces/mpc/Openloong-dyn-control
-OPENLOONG_ROS_TOPIC_IMU=/imu/data \
-OPENLOONG_ROS_TOPIC_JOINT_STATES=/joint_states \
-./tools/real_robot/start_rviz_real_leg.sh
+## 3. 安全策略
+
+安全检查覆盖 IMU 姿态/角速度、关节位置、关节速度、命令跳变，以及真机底层等效 PVT 合力矩：
+
+```text
+tau_est = kp * (q_des - q_cur) + kd * (0 - dq_cur) + tau_ff
 ```
 
-## 4. 常用环境变量
+`kp/kd/minPos/maxPos/maxSpeed/maxTorque` 统一来自 `common/joint_ctrl_config_v4_leg.json`。PVT 合力矩安全阈值为：
 
-- `CONTROL_MODE`：`ros2_real|mujoco|mujoco_ros2`
-- `ROBOT_VARIANT`：`v4|leg`（`mujoco` 与 `mujoco_ros2` 均支持；`ros2_real` 目前仅支持 `leg`）
-- `TARGET`：兼容旧变量（建议迁移到 `ROBOT_VARIANT`）
-- `OPENLOONG_CONTROLLER_CONFIG`：配置路径（默认 `common/controller_config_v4_leg.json`）
-- `START_RVIZ`：是否启动 RViz（`1/0`）
-- `AUTOWALK`：真机自动起步（默认 `0`，安全默认）
-- `OPENLOONG_ROS_TOPIC_IMU`：IMU 话题
-- `OPENLOONG_ROS_TOPIC_JOINT_STATES`：关节状态话题
-- `OPENLOONG_ROBOT_URDF`：URDF 路径
-- `OPENLOONG_RVIZ_CONFIG`：RViz 配置路径
+```text
+abs(tau_est) <= maxTorque * real_pvt_torque_limit_scale
+```
+
+`real_pvt_torque_limit_scale` 在 `common/controller_config_v4_leg.json` 中配置，默认 `0.5`。
+
+任一安全检查失败后，控制器立即停发动作命令，不发布保持姿态或冻结姿态。恢复方式是人工停止进程、检查现场和日志后重新启动。

@@ -22,9 +22,11 @@
 #include "foot_placement.h"
 #include "joystick_interpreter.h"
 #include "controller_config.h"
+#include "json/json.h"
 #include <string>
 #include <iostream>
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cctype>
 #include <cerrno>
@@ -32,6 +34,9 @@
 #include <chrono>
 #include <thread>
 #include <cstdlib>
+#include <fstream>
+#include <sstream>
+#include <vector>
 #include <termios.h>
 #include <unistd.h>
 #include <fcntl.h>
@@ -653,6 +658,8 @@ public:
                     buttonState.key_e = true;
                 else if (k == 'f')
                     buttonState.key_f = true;
+                else if (k == 'g')
+                    buttonState.key_g = true;
                 continue;
             }
 
@@ -669,6 +676,344 @@ private:
     bool initialized_{false};
     int oldFlags_{-1};
     termios oldTermios_{};
+};
+
+struct RealJointSafetyParam
+{
+    std::string name;
+    double kp{0.0};
+    double kd{0.0};
+    double minPos{-3.14};
+    double maxPos{3.14};
+    double maxSpeed{0.0};
+    double maxTorque{0.0};
+};
+
+const std::array<std::string, 12> kRealLegJointNames = {
+    "left_hip_roll_joint", "left_hip_yaw_joint", "left_hip_pitch_joint",
+    "left_knee_joint", "left_ankle_pitch_joint", "left_ankle_roll_joint",
+    "right_hip_roll_joint", "right_hip_yaw_joint", "right_hip_pitch_joint",
+    "right_knee_joint", "right_ankle_pitch_joint", "right_ankle_roll_joint"};
+
+bool loadRealJointSafetyParams(std::vector<RealJointSafetyParam> &outParams,
+                               std::string &loadedPath,
+                               std::string &errMsg)
+{
+    const std::array<std::string, 3> candidates = {
+        "joint_ctrl_config_v4_leg.json",
+        "../common/joint_ctrl_config_v4_leg.json",
+        "common/joint_ctrl_config_v4_leg.json"};
+
+    Json::Value root;
+    std::string parseErr;
+    for (const std::string &path : candidates)
+    {
+        std::ifstream in(path, std::ios::binary);
+        if (!in.is_open())
+            continue;
+
+        Json::CharReaderBuilder builder;
+        builder["allowComments"] = true;
+        builder["collectComments"] = false;
+        if (!Json::parseFromStream(builder, in, &root, &parseErr))
+        {
+            errMsg = "failed to parse " + path + ": " + parseErr;
+            return false;
+        }
+        loadedPath = path;
+        break;
+    }
+
+    if (loadedPath.empty())
+    {
+        errMsg = "failed to open joint_ctrl_config_v4_leg.json";
+        return false;
+    }
+
+    outParams.clear();
+    outParams.reserve(kRealLegJointNames.size());
+    for (const std::string &name : kRealLegJointNames)
+    {
+        if (!root.isMember(name))
+        {
+            errMsg = "joint config missing " + name;
+            return false;
+        }
+        const Json::Value &joint = root[name];
+        const std::array<const char *, 6> required = {"kp", "kd", "minPos", "maxPos", "maxSpeed", "maxTorque"};
+        for (const char *key : required)
+        {
+            if (!joint.isMember(key) || !joint[key].isNumeric())
+            {
+                errMsg = "joint config " + name + " missing numeric " + key;
+                return false;
+            }
+        }
+
+        RealJointSafetyParam param;
+        param.name = name;
+        param.kp = joint["kp"].asDouble();
+        param.kd = joint["kd"].asDouble();
+        param.minPos = joint["minPos"].asDouble();
+        param.maxPos = joint["maxPos"].asDouble();
+        param.maxSpeed = joint["maxSpeed"].asDouble();
+        param.maxTorque = joint["maxTorque"].asDouble();
+        outParams.push_back(param);
+    }
+
+    errMsg.clear();
+    return true;
+}
+
+class RealSafetyMonitor
+{
+public:
+    RealSafetyMonitor(const ControllerConfig &config,
+                      const std::vector<RealJointSafetyParam> &jointParams)
+        : jointParams_(jointParams),
+          pvtTorqueLimitScale_(config.realPvtTorqueLimitScale)
+    {
+        parseBoolEnv(getEnvEither("OPENLOONG_REAL_SAFETY_ENABLE", "REAL_SAFETY_ENABLE"), enabled_);
+        double tmp = 0.0;
+        if (parseDoubleEnv(getEnvEither("OPENLOONG_REAL_SAFETY_ROLL_PITCH_LIMIT_DEG", "REAL_SAFETY_ROLL_PITCH_LIMIT_DEG"), tmp))
+            rollPitchLimitRad_ = std::max(1.0, tmp) * kDeg2Rad;
+        if (parseDoubleEnv(getEnvEither("OPENLOONG_REAL_SAFETY_ANGVEL_LIMIT_RAD_S", "REAL_SAFETY_ANGVEL_LIMIT_RAD_S"), tmp))
+            angVelLimitRadS_ = std::max(0.1, tmp);
+        if (parseDoubleEnv(getEnvEither("OPENLOONG_REAL_SAFETY_CMD_JUMP_LIMIT_RAD", "REAL_SAFETY_CMD_JUMP_LIMIT_RAD"), tmp))
+            cmdJumpLimitRad_ = std::max(0.001, tmp);
+    }
+
+    void printConfig() const
+    {
+        std::cout << "[Safety-Real] " << (enabled_ ? "enabled" : "disabled")
+                  << ", roll_pitch_limit=" << rollPitchLimitRad_ / kDeg2Rad << " deg"
+                  << ", angvel_limit=" << angVelLimitRadS_ << " rad/s"
+                  << ", cmd_jump_limit=" << cmdJumpLimitRad_ << " rad"
+                  << ", pvt_torque_limit_scale=" << pvtTorqueLimitScale_ << std::endl;
+        if (jointParams_.size() == expectedJointCount_)
+        {
+            std::cout << "[Safety-Real] PVT torque limits:";
+            for (const RealJointSafetyParam &param : jointParams_)
+            {
+                std::cout << " " << param.name << "=" << param.maxTorque * pvtTorqueLimitScale_;
+            }
+            std::cout << " N*m" << std::endl;
+        }
+    }
+
+    void resetCommandHistory()
+    {
+        hasLastCommand_ = false;
+        lastCommand_.clear();
+    }
+
+    bool validateSensor(const DataBus &state, std::string &reason) const
+    {
+        if (!enabled_)
+            return true;
+
+        for (int i = 0; i < 3; i++)
+        {
+            if (!std::isfinite(state.rpy[i]) || !std::isfinite(state.baseAngVel[i]) || !std::isfinite(state.baseAcc[i]))
+            {
+                reason = "sensor contains NaN/Inf";
+                return false;
+            }
+        }
+        if (std::fabs(state.rpy[0]) > rollPitchLimitRad_ || std::fabs(state.rpy[1]) > rollPitchLimitRad_)
+        {
+            std::ostringstream oss;
+            oss << "raw IMU roll/pitch over limit: roll=" << state.rpy[0] << ", pitch=" << state.rpy[1];
+            reason = oss.str();
+            return false;
+        }
+        const double omegaNorm = std::sqrt(state.baseAngVel[0] * state.baseAngVel[0] +
+                                           state.baseAngVel[1] * state.baseAngVel[1] +
+                                           state.baseAngVel[2] * state.baseAngVel[2]);
+        if (omegaNorm > angVelLimitRadS_)
+        {
+            std::ostringstream oss;
+            oss << "base angular velocity over limit: norm=" << omegaNorm;
+            reason = oss.str();
+            return false;
+        }
+        if (!isFiniteVector(state.motors_pos_cur) ||
+            !isFiniteVector(state.motors_vel_cur) ||
+            !isFiniteVector(state.motors_tor_cur))
+        {
+            reason = "joint feedback contains NaN/Inf";
+            return false;
+        }
+        if (jointParams_.size() != expectedJointCount_)
+        {
+            reason = "joint safety parameters invalid";
+            return false;
+        }
+        for (size_t i = 0; i < expectedJointCount_; i++)
+        {
+            const RealJointSafetyParam &param = jointParams_[i];
+            const double qCur = state.motors_pos_cur[i];
+            const double dqCur = state.motors_vel_cur[i];
+            if (qCur < param.minPos || qCur > param.maxPos)
+            {
+                std::ostringstream oss;
+                oss << "joint feedback position over limit: " << param.name
+                    << ", q_cur=" << qCur
+                    << ", range=[" << param.minPos << ", " << param.maxPos << "]";
+                reason = oss.str();
+                return false;
+            }
+            if (std::fabs(dqCur) > param.maxSpeed)
+            {
+                std::ostringstream oss;
+                oss << "joint feedback velocity over limit: " << param.name
+                    << ", dq_cur=" << dqCur
+                    << ", limit=" << param.maxSpeed;
+                reason = oss.str();
+                return false;
+            }
+        }
+        return true;
+    }
+
+    bool validateEstimatedState(const DataBus &state, std::string &reason) const
+    {
+        if (!enabled_)
+            return true;
+        for (int i = 0; i < 3; i++)
+        {
+            if (!std::isfinite(state.base_rpy(i)) || !std::isfinite(state.base_omega_W(i)))
+            {
+                reason = "estimated base state contains NaN/Inf";
+                return false;
+            }
+        }
+        if (std::fabs(state.base_rpy(0)) > rollPitchLimitRad_ || std::fabs(state.base_rpy(1)) > rollPitchLimitRad_)
+        {
+            std::ostringstream oss;
+            oss << "estimated roll/pitch over limit: roll=" << state.base_rpy(0)
+                << ", pitch=" << state.base_rpy(1);
+            reason = oss.str();
+            return false;
+        }
+        const double omegaNorm = state.base_omega_W.norm();
+        if (omegaNorm > angVelLimitRadS_)
+        {
+            std::ostringstream oss;
+            oss << "estimated angular velocity over limit: norm=" << omegaNorm;
+            reason = oss.str();
+            return false;
+        }
+        return true;
+    }
+
+    bool validateCommandAndRemember(const DataBus &state,
+                                    const std::vector<double> &cmd,
+                                    const std::vector<double> &tauFf,
+                                    std::string &reason)
+    {
+        if (!enabled_)
+            return true;
+        if (!isValidCommandVector(cmd))
+        {
+            reason = "command vector invalid: size/nonfinite/range";
+            return false;
+        }
+        if (tauFf.size() < expectedJointCount_ || !isFiniteVector(tauFf))
+        {
+            reason = "torque feedforward vector invalid: size/nonfinite";
+            return false;
+        }
+        if (jointParams_.size() != expectedJointCount_ ||
+            state.motors_pos_cur.size() < expectedJointCount_ ||
+            state.motors_vel_cur.size() < expectedJointCount_)
+        {
+            reason = "joint safety input size invalid";
+            return false;
+        }
+
+        for (size_t i = 0; i < expectedJointCount_; i++)
+        {
+            const RealJointSafetyParam &param = jointParams_[i];
+            const double qCur = state.motors_pos_cur[i];
+            const double dqCur = state.motors_vel_cur[i];
+            const double qDes = cmd[i];
+            const double tauFfVal = tauFf[i];
+            if (qDes < param.minPos || qDes > param.maxPos)
+            {
+                std::ostringstream oss;
+                oss << "joint command position over limit: " << param.name
+                    << ", q_des=" << qDes
+                    << ", range=[" << param.minPos << ", " << param.maxPos << "]";
+                reason = oss.str();
+                return false;
+            }
+
+            const double tauPd = param.kp * (qDes - qCur) + param.kd * (0.0 - dqCur);
+            const double tauEst = tauPd + tauFfVal;
+            const double tauLimit = param.maxTorque * pvtTorqueLimitScale_;
+            if (std::fabs(tauEst) > tauLimit)
+            {
+                std::ostringstream oss;
+                oss << "estimated PVT torque over limit: " << param.name
+                    << ", q_cur=" << qCur
+                    << ", q_des=" << qDes
+                    << ", dq_cur=" << dqCur
+                    << ", tau_pd=" << tauPd
+                    << ", tau_ff=" << tauFfVal
+                    << ", tau_est=" << tauEst
+                    << ", limit=" << tauLimit;
+                reason = oss.str();
+                return false;
+            }
+        }
+        if (hasLastCommand_)
+        {
+            double maxJump = 0.0;
+            for (size_t i = 0; i < expectedJointCount_; i++)
+                maxJump = std::max(maxJump, std::fabs(cmd[i] - lastCommand_[i]));
+            if (maxJump > cmdJumpLimitRad_)
+            {
+                std::ostringstream oss;
+                oss << "command jump over limit: max_jump=" << maxJump;
+                reason = oss.str();
+                return false;
+            }
+        }
+        lastCommand_.assign(cmd.begin(), cmd.begin() + expectedJointCount_);
+        hasLastCommand_ = true;
+        return true;
+    }
+
+private:
+    static constexpr size_t expectedJointCount_{12};
+    static constexpr double kDeg2Rad{3.14159265358979323846 / 180.0};
+
+    bool enabled_{true};
+    bool hasLastCommand_{false};
+    double rollPitchLimitRad_{12.0 * kDeg2Rad};
+    double angVelLimitRadS_{5.0};
+    double cmdJumpLimitRad_{0.25};
+    double pvtTorqueLimitScale_{0.5};
+    std::vector<RealJointSafetyParam> jointParams_;
+    std::vector<double> lastCommand_;
+
+    static bool isFiniteVector(const std::vector<double> &values)
+    {
+        for (double v : values)
+        {
+            if (!std::isfinite(v))
+                return false;
+        }
+        return true;
+    }
+
+    bool isValidCommandVector(const std::vector<double> &cmd) const
+    {
+        return cmd.size() >= expectedJointCount_ &&
+               isFiniteVector(cmd);
+    }
+
 };
 
 void applyLegControlStateMachine(const ControllerConfig &controllerConfig,
@@ -1033,6 +1378,8 @@ int runMujoco(const ControllerConfig &controllerConfig)
     Eigen::Matrix3d fe_r_rot_des = eul2Rot(fe_r_eul_L_des(0), fe_r_eul_L_des(1), fe_r_eul_L_des(2));
 
     auto resLeg = kinDynSolver.computeInK_Leg(fe_l_rot_des, fe_l_pos_L_des, fe_r_rot_des, fe_r_pos_L_des);
+    // Note: empirically measured closed-loop balance pose was tested but unstable in open-loop.
+    // Keeping original IK result for open-loop stability.
     Eigen::VectorXd qIniDes = Eigen::VectorXd::Zero(mj_model->nq, 1);
     qIniDes.block(7, 0, mj_model->nq - 7, 1) = resLeg.jointPosRes;
     WBC_solv.setQini(qIniDes, RobotState.q);
@@ -1186,9 +1533,21 @@ int runRos2Real(const ControllerConfig &controllerConfig)
     Eigen::Matrix3d fe_r_rot_des = eul2Rot(fe_r_eul_L_des(0), fe_r_eul_L_des(1), fe_r_eul_L_des(2));
 
     auto resLeg = kinDynSolver.computeInK_Leg(fe_l_rot_des, fe_l_pos_L_des, fe_r_rot_des, fe_r_pos_L_des);
+    // Note: empirically measured closed-loop balance pose was tested but unstable in open-loop.
+    // Keeping original IK result for open-loop stability.
     Eigen::VectorXd qIniDes = Eigen::VectorXd::Zero(robot_nq, 1);
     qIniDes.block(7, 0, robot_nq - 7, 1) = resLeg.jointPosRes;
     WBC_solv.setQini(qIniDes, RobotState.q);
+
+    std::vector<RealJointSafetyParam> jointSafetyParams;
+    std::string jointSafetyPath;
+    std::string jointSafetyErr;
+    if (!loadRealJointSafetyParams(jointSafetyParams, jointSafetyPath, jointSafetyErr))
+    {
+        std::cerr << "[Safety-Real] failed to load joint safety config: " << jointSafetyErr << std::endl;
+        return 1;
+    }
+    std::cout << "[Safety-Real] joint limits/PVT gains loaded: " << jointSafetyPath << std::endl;
 
     addCommonLoggerItems(logger, robot_nv);
 
@@ -1196,6 +1555,8 @@ int runRos2Real(const ControllerConfig &controllerConfig)
     EstimatorTruthLog truthLog;
     double ctrlTime = 0.0;
     bool openLoopPhaseActive = true;
+    bool publishEnabled = false;
+    bool safetyStopped = false;
     UIctr::ButtonState buttonState;
     bool autoWalkEnabled = false;
     bool autoWalkStarted = false;
@@ -1205,13 +1566,9 @@ int runRos2Real(const ControllerConfig &controllerConfig)
     const double xv_max = controllerConfig.speedMax;
     const double xv_min = controllerConfig.speedMin;
     const double turnRateCmd = controllerConfig.turnRateCmd;
-    parseBoolEnv(std::getenv("AUTOWALK"), autoWalkEnabled);
-    if (autoWalkEnabled)
-    {
-        std::cout << "[AutoWalk-Real] enabled, speed=" << autoWalkSpeed << " m/s" << std::endl;
-    }
-    std::cout << "[OpenLoop-Real] press F to enable closed-loop walk control." << std::endl;
-    std::cout << "[Key-Real] Space(stand/walk) W/S/A/D(move) Q/E(speed) J(stop) H(reset yaw)" << std::endl;
+    std::cout << "[PublishGate-Real] startup is subscribe-only. Press G to start/stop control publishing." << std::endl;
+    std::cout << "[OpenLoop-Real] after G starts publishing, press F to enable closed-loop stand control." << std::endl;
+    std::cout << "[Key-Real] G(publish on/off) F(closed-loop) Space(stand/walk) W/S/A/D(move) Q/E(speed) J(stop) H(reset yaw)" << std::endl;
 
     TerminalKeyReader terminalKeyReader;
     std::string terminalErr;
@@ -1220,6 +1577,32 @@ int runRos2Real(const ControllerConfig &controllerConfig)
     {
         std::cerr << "[Key-Real] terminal keyboard disabled: " << terminalErr << std::endl;
     }
+    RealSafetyMonitor safetyMonitor(controllerConfig, jointSafetyParams);
+    safetyMonitor.printConfig();
+
+    auto forceSubscribeOnlyStand = [&]()
+    {
+        publishEnabled = false;
+        openLoopPhaseActive = true;
+        RobotState.motionState = DataBus::Stand;
+        autoWalkStarted = false;
+        jsInterp.reset();
+        jsInterp.setVxDesLPara(0.0, controllerConfig.vxStopRampTime);
+        jsInterp.setVyDesLPara(0.0, controllerConfig.vxStopRampTime);
+        jsInterp.setWzDesLPara(0.0, controllerConfig.wzStopRampTime);
+        safetyMonitor.resetCommandHistory();
+    };
+
+    auto stopPublishingForSafety = [&](const std::string &reason)
+    {
+        if (!safetyStopped)
+        {
+            std::cerr << "[Safety-Real] stopped publishing control commands: " << reason << std::endl;
+            std::cerr << "[Safety-Real] restart the controller manually after checking the robot." << std::endl;
+        }
+        safetyStopped = true;
+        forceSubscribeOnlyStand();
+    };
 
     auto nextTick = std::chrono::steady_clock::now();
     bool staleWarned = false;
@@ -1229,9 +1612,32 @@ int runRos2Real(const ControllerConfig &controllerConfig)
         nextTick += std::chrono::duration_cast<std::chrono::steady_clock::duration>(std::chrono::duration<double>(mainCtrlDt));
 
         ros2Interface.spinSome();
+        buttonState = terminalKeyReader.poll();
+        if (buttonState.key_g)
+        {
+            if (safetyStopped)
+            {
+                std::cerr << "[PublishGate-Real] G ignored after safety stop. Please restart manually." << std::endl;
+            }
+            else if (publishEnabled)
+            {
+                forceSubscribeOnlyStand();
+                std::cout << "[PublishGate-Real] control publishing stopped by G." << std::endl;
+            }
+            else
+            {
+                publishEnabled = true;
+                openLoopPhaseActive = true;
+                RobotState.motionState = DataBus::Stand;
+                autoWalkStarted = false;
+                jsInterp.reset();
+                safetyMonitor.resetCommandHistory();
+                std::cout << "[PublishGate-Real] control publishing enabled by G. Open-loop stand command active." << std::endl;
+            }
+        }
+
         if (!ros2Interface.isReady())
         {
-            ros2Interface.setMotorsPosition(eigen2std(resLeg.jointPosRes));
             std::this_thread::sleep_until(nextTick);
             continue;
         }
@@ -1241,9 +1647,10 @@ int runRos2Real(const ControllerConfig &controllerConfig)
             if (!staleWarned)
             {
                 staleWarned = true;
-                std::cerr << "[ROS2] sensor stream stale, holding stand command." << std::endl;
+                std::cerr << "[ROS2] sensor stream stale." << std::endl;
             }
-            ros2Interface.setMotorsPosition(eigen2std(resLeg.jointPosRes));
+            if (publishEnabled)
+                stopPublishingForSafety("sensor stream stale");
             std::this_thread::sleep_until(nextTick);
             continue;
         }
@@ -1251,8 +1658,34 @@ int runRos2Real(const ControllerConfig &controllerConfig)
 
         ctrlTime += mainCtrlDt;
         ros2Interface.dataBusWrite(RobotState);
+
+        std::string safetyReason;
+        if (!safetyMonitor.validateSensor(RobotState, safetyReason))
+        {
+            stopPublishingForSafety(safetyReason);
+            recordCommonLogger(logger, RobotState, ctrlTime, mainCtrlDt, mainCtrlDt * mpcCtrlDecimation, truthLog);
+            std::this_thread::sleep_until(nextTick);
+            continue;
+        }
+
         runEstimationAndDynamics(RobotState, kinDynSolver, StateModule, ctrlTime);
-        buttonState = terminalKeyReader.poll();
+        if (!safetyMonitor.validateEstimatedState(RobotState, safetyReason))
+        {
+            stopPublishingForSafety(safetyReason);
+            recordCommonLogger(logger, RobotState, ctrlTime, mainCtrlDt, mainCtrlDt * mpcCtrlDecimation, truthLog);
+            std::this_thread::sleep_until(nextTick);
+            continue;
+        }
+
+        if (!publishEnabled)
+        {
+            openLoopPhaseActive = true;
+            RobotState.motionState = DataBus::Stand;
+            jsInterp.reset();
+            recordCommonLogger(logger, RobotState, ctrlTime, mainCtrlDt, mainCtrlDt * mpcCtrlDecimation, truthLog);
+            std::this_thread::sleep_until(nextTick);
+            continue;
+        }
 
         applyLegControlStateMachine(controllerConfig, buttonState, RobotState, jsInterp, gaitScheduler,
                                     openLoopPhaseActive, autoWalkEnabled, autoWalkStarted, autoWalkSpeed,
@@ -1264,7 +1697,18 @@ int runRos2Real(const ControllerConfig &controllerConfig)
                            mpcCtrlCount, mpcCtrlDecimation,
                            true, openLoopPhaseActive);
 
-        ros2Interface.setMotorsPosition(RobotState.motors_pos_des);
+        if (!safetyMonitor.validateCommandAndRemember(RobotState,
+                                                      RobotState.motors_pos_des,
+                                                      RobotState.motors_tor_des,
+                                                      safetyReason))
+        {
+            stopPublishingForSafety(safetyReason);
+            recordCommonLogger(logger, RobotState, ctrlTime, mainCtrlDt, mainCtrlDt * mpcCtrlDecimation, truthLog);
+            std::this_thread::sleep_until(nextTick);
+            continue;
+        }
+
+        ros2Interface.setMotorsCommand(RobotState.motors_pos_des, RobotState.motors_tor_des);
         recordCommonLogger(logger, RobotState, ctrlTime, mainCtrlDt, mainCtrlDt * mpcCtrlDecimation, truthLog);
 
         std::this_thread::sleep_until(nextTick);

@@ -21,8 +21,9 @@ struct ControllerConfig
     // ROS2 topic names for real backend
     std::string rosTopicImu{"/imu/data"};
     std::string rosTopicJointStates{"/joint_states"};
-    std::string rosTopicActionCmd{"/rl_motion_control_command"};
+    std::string rosTopicActionCmd{"/rl_motion_control_command_with_torque"};
     double rosDataTimeoutSec{0.2};
+    double realPvtTorqueLimitScale{0.5};
 
     // Control loop timing
     double mainControlDt{0.001};

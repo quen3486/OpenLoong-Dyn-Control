@@ -81,6 +81,7 @@ bool loadControllerConfig(const std::string &jsonPath, ControllerConfig &outProf
     readOptionalString(root, "ros_topic_joint_states", outProfile.rosTopicJointStates);
     readOptionalString(root, "ros_topic_action_cmd", outProfile.rosTopicActionCmd);
     readOptionalDouble(root, "ros_data_timeout_sec", outProfile.rosDataTimeoutSec);
+    readOptionalDouble(root, "real_pvt_torque_limit_scale", outProfile.realPvtTorqueLimitScale);
 
     readOptionalDouble(root, "main_control_dt", outProfile.mainControlDt);
     readOptionalDouble(root, "mpc_control_dt", outProfile.mpcControlDt);
@@ -155,6 +156,7 @@ bool loadControllerConfig(const std::string &jsonPath, ControllerConfig &outProf
     // Basic safety clamping
     outProfile.simRosPublishDt = std::clamp(outProfile.simRosPublishDt, 1e-3, 0.1);
     outProfile.rosDataTimeoutSec = std::clamp(outProfile.rosDataTimeoutSec, 0.01, 2.0);
+    outProfile.realPvtTorqueLimitScale = std::clamp(outProfile.realPvtTorqueLimitScale, 0.0, 1.0);
 
     outProfile.tSwing = std::max(outProfile.tSwing, 0.05);
     outProfile.phiSwitchMin = std::clamp(outProfile.phiSwitchMin, 0.0, 0.99);

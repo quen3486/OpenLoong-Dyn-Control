@@ -3,8 +3,9 @@
   "sim_ros_publish_dt": 0.01,           // 仿真ROS2状态发布周期(s)
   "ros_topic_imu": "/imu/data",         // IMU姿态话题
   "ros_topic_joint_states": "/joint_states", // 关节状态话题
-  "ros_topic_action_cmd": "/rl_motion_control_command", // 动作命令话题（与驱动对齐）
+  "ros_topic_action_cmd": "/rl_motion_control_command_with_torque", // 动作命令话题（29位置+29力矩前馈）
   "ros_data_timeout_sec": 0.2,          // 传感超时阈值(s)
+  "real_pvt_torque_limit_scale": 0.5,   // 真机PVT合力矩安全阈值比例：maxTorque * scale
 
   // ===== 控制循环频率 =====
   "main_control_dt": 0.001,      // 主控制链路周期(s)，默认1kHz

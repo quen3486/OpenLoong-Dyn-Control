@@ -192,7 +192,8 @@ void ROS2_Interface_V4_Leg::dataBusWrite(DataBus &busIn)
 #endif
 }
 
-void ROS2_Interface_V4_Leg::setMotorsPosition(const std::vector<double> &qDesIn)
+void ROS2_Interface_V4_Leg::setMotorsCommand(const std::vector<double> &qDesIn,
+                                             const std::vector<double> &tauFfIn)
 {
 #if OPENLOONG_HAS_ROS2
     if (!isInitialized_ || actionCmdPub_ == nullptr)
@@ -200,15 +201,21 @@ void ROS2_Interface_V4_Leg::setMotorsPosition(const std::vector<double> &qDesIn)
         return;
     }
     std_msgs::msg::Float64MultiArray msg;
-    msg.data.assign(29, 0.0);
-    const size_t n = std::min<size_t>(12, qDesIn.size());
-    for (size_t i = 0; i < n; i++)
+    msg.data.assign(58, 0.0);
+    const size_t nPos = std::min<size_t>(12, qDesIn.size());
+    for (size_t i = 0; i < nPos; i++)
     {
         msg.data[i] = qDesIn[i];
+    }
+    const size_t nTau = std::min<size_t>(12, tauFfIn.size());
+    for (size_t i = 0; i < nTau; i++)
+    {
+        msg.data[29 + i] = tauFfIn[i];
     }
     actionCmdPub_->publish(msg);
 #else
     (void)qDesIn;
+    (void)tauFfIn;
 #endif
 }
 
