@@ -40,6 +40,54 @@ double GaitScheduler::designPhiSwitchMin() const
     return std::clamp(designed, lo, hi);
 }
 
+void GaitScheduler::resetSwitchContactConfirmTimers()
+{
+    leftSwitchContactConfirmTimer = 0.0;
+    rightSwitchContactConfirmTimer = 0.0;
+}
+
+void GaitScheduler::updateSwitchContactConfirmTimers()
+{
+    if (motionState != DataBus::Walk || legState == DataBus::DSt || phi < phiSwitchMinRuntime)
+    {
+        resetSwitchContactConfirmTimers();
+        return;
+    }
+
+    const double dtStep = std::max(dt, 0.0);
+    if (FLest.size() > 2 && FLest[2] >= fzSwitchThreshold)
+    {
+        leftSwitchContactConfirmTimer += dtStep;
+    }
+    else
+    {
+        leftSwitchContactConfirmTimer = 0.0;
+    }
+
+    if (FRest.size() > 2 && FRest[2] >= fzSwitchThreshold)
+    {
+        rightSwitchContactConfirmTimer += dtStep;
+    }
+    else
+    {
+        rightSwitchContactConfirmTimer = 0.0;
+    }
+}
+
+bool GaitScheduler::leftSwitchContactConfirmed() const
+{
+    return FLest.size() > 2 &&
+           FLest[2] >= fzSwitchThreshold &&
+           leftSwitchContactConfirmTimer >= std::max(0.0, contactConfirmTimeSec);
+}
+
+bool GaitScheduler::rightSwitchContactConfirmed() const
+{
+    return FRest.size() > 2 &&
+           FRest[2] >= fzSwitchThreshold &&
+           rightSwitchContactConfirmTimer >= std::max(0.0, contactConfirmTimeSec);
+}
+
 void GaitScheduler::dataBusRead(const DataBus &robotState)
 {
     if (motionState != DataBus::Stand && stepNumCur == 0)
@@ -129,6 +177,7 @@ void GaitScheduler::step()
         stepNumCur = 0;
         legState = DataBus::DSt;
         legStateNext = firstleg;
+        resetSwitchContactConfirmTimers();
     }
     else if (motionState == DataBus::Walk)
     {
@@ -151,6 +200,7 @@ void GaitScheduler::step()
     {
         isIni = true;
         legState = firstleg;
+        resetSwitchContactConfirmTimers();
         if (legState == DataBus::LSt)
         {
             swingStartPos_W = fe_r_pos_W;
@@ -163,23 +213,27 @@ void GaitScheduler::step()
         }
     }
 
+    updateSwitchContactConfirmTimers();
+
     if (enableNextStep)
     {
-        if (legState == DataBus::LSt && FRest[2] >= fzSwitchThreshold && phi >= phiSwitchMinRuntime)
+        if (legState == DataBus::LSt && rightSwitchContactConfirmed() && phi >= phiSwitchMinRuntime)
         {
             legState = DataBus::RSt;
             swingStartPos_W = fe_l_pos_W;
             stanceStartPos_W = fe_r_pos_W;
             phi = 0.0;
             stepNumCur++;
+            resetSwitchContactConfirmTimers();
         }
-        else if (legState == DataBus::RSt && FLest[2] >= fzSwitchThreshold && phi >= phiSwitchMinRuntime)
+        else if (legState == DataBus::RSt && leftSwitchContactConfirmed() && phi >= phiSwitchMinRuntime)
         {
             legState = DataBus::LSt;
             swingStartPos_W = fe_r_pos_W;
             stanceStartPos_W = fe_l_pos_W;
             phi = 0.0;
             stepNumCur++;
+            resetSwitchContactConfirmTimers();
         }
     }
 

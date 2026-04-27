@@ -28,6 +28,7 @@ public:
     double phiSwitchDesignMax{0.9};
     double fzSwitchThreshold{280.0};
     double fzStopThreshold{200.0};
+    double contactConfirmTimeSec{0.02};
     double Fz_L_m{0}, Fz_R_m{0};
     DataBus::LegState firstleg, legState, legStateNext;
     DataBus::MotionState motionState;
@@ -45,7 +46,13 @@ public:
     int stepNumDes{1}, stepNumCur{0};
 private:
     double designPhiSwitchMin() const;
+    void resetSwitchContactConfirmTimers();
+    void updateSwitchContactConfirmTimers();
+    bool leftSwitchContactConfirmed() const;
+    bool rightSwitchContactConfirmed() const;
     double phiSwitchMinRuntime{0.6};
+    double leftSwitchContactConfirmTimer{0.0};
+    double rightSwitchContactConfirmTimer{0.0};
     Eigen::VectorXd fe_r_pos_W, fe_l_pos_W, swingStartPos_W, posHip_W, posST_W, hip_r_pos_W, hip_l_pos_W, dq;
     Eigen::VectorXd stanceStartPos_W;
     Eigen::MatrixXd fe_r_rot_W, fe_l_rot_W;

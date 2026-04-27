@@ -4,6 +4,8 @@
  */
 #include "MJ_interface_v4_leg.h"
 
+#include <algorithm>
+
 MJ_Interface_V4_Leg::MJ_Interface_V4_Leg(mjModel *mj_modelIn, mjData *mj_dataIn)
 {
     mj_model = mj_modelIn;
@@ -44,6 +46,9 @@ MJ_Interface_V4_Leg::MJ_Interface_V4_Leg(mjModel *mj_modelIn, mjData *mj_dataIn)
     accSensorId = mj_name2id(mj_model, mjOBJ_SENSOR, accSensorName.c_str());
     touchSensorLId = mj_name2id(mj_model, mjOBJ_SENSOR, touchSensorLName.c_str());
     touchSensorRId = mj_name2id(mj_model, mjOBJ_SENSOR, touchSensorRName.c_str());
+    floorGeomId = mj_name2id(mj_model, mjOBJ_GEOM, "floor");
+    leftFootBodyId = mj_name2id(mj_model, mjOBJ_BODY, "left_ankle_roll");
+    rightFootBodyId = mj_name2id(mj_model, mjOBJ_BODY, "right_ankle_roll");
 }
 
 void MJ_Interface_V4_Leg::updateSensorValues()
@@ -86,12 +91,46 @@ void MJ_Interface_V4_Leg::updateSensorValues()
 
     const double touchL = (touchSensorLId >= 0) ? mj_data->sensordata[mj_model->sensor_adr[touchSensorLId]] : 0.0;
     const double touchR = (touchSensorRId >= 0) ? mj_data->sensordata[mj_model->sensor_adr[touchSensorRId]] : 0.0;
+    double contactForceL = 0.0;
+    double contactForceR = 0.0;
+    for (int i = 0; i < mj_data->ncon; ++i)
+    {
+        const mjContact &contact = mj_data->contact[i];
+        const int geom1 = contact.geom1;
+        const int geom2 = contact.geom2;
+        const bool floorContact = (geom1 == floorGeomId) || (geom2 == floorGeomId);
+        if (!floorContact || geom1 < 0 || geom2 < 0)
+        {
+            continue;
+        }
+
+        const int body1 = mj_model->geom_bodyid[geom1];
+        const int body2 = mj_model->geom_bodyid[geom2];
+        const bool leftFootContact = (body1 == leftFootBodyId) || (body2 == leftFootBodyId);
+        const bool rightFootContact = (body1 == rightFootBodyId) || (body2 == rightFootBodyId);
+        if (!leftFootContact && !rightFootContact)
+        {
+            continue;
+        }
+
+        mjtNum contactForce[6]{0.0, 0.0, 0.0, 0.0, 0.0, 0.0};
+        mj_contactForce(mj_model, mj_data, i, contactForce);
+        const double normalForce = std::abs(static_cast<double>(contactForce[0]));
+        if (leftFootContact)
+        {
+            contactForceL += normalForce;
+        }
+        if (rightFootContact)
+        {
+            contactForceR += normalForce;
+        }
+    }
     f3d[0][0] = 0.0;
     f3d[1][0] = 0.0;
-    f3d[2][0] = touchL;
+    f3d[2][0] = std::max(touchL, contactForceL);
     f3d[0][1] = 0.0;
     f3d[1][1] = 0.0;
-    f3d[2][1] = touchR;
+    f3d[2][1] = std::max(touchR, contactForceR);
 }
 
 void MJ_Interface_V4_Leg::setMotorsTorque(std::vector<double> &tauIn)

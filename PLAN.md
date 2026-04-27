@@ -1,30 +1,120 @@
-## Leg 链路 MuJoCo 传感等价化与真机迁移计划
+# v4_leg 闭环 PVT 配置化、参数扫测与换相突变继续优化计划
 
-### Summary
-- 已核对 `StateEst` I/O：输入来自 IMU（`rpy/baseAcc/baseAngVel`）、步态相位（`phi/legState`）、足端运动学（`fe_*`）和动力学+关节力矩（`dyn_* + motors_tor_cur`）；输出回写 `base_pos/base_vel/base_rpy/base_omega_W` 与 `q/dq`，并输出 `FL_est/FR_est`。
-- 已核对 `MPC` I/O：输入是估计后的 `base_rpy/q/dq`、`js_*`、足端位姿、`legState/legStateNext/phi/tSwing`、惯量；输出 `Fr_ff/des_ddq/des_dq/des_delta_q/base_*_des` 和 QP 状态。
-- 已核对 `WBC` I/O：输入是全身动力学雅可比、足端/髋/CoM状态、`Fr_ff + des_*` 与步态状态；输出 `wbc_delta_q_final/wbc_dq_final/wbc_tauJointRes/wbc_FrRes` 和 QP 状态。
-- 已核对 Python 驱动脚本 topic：订阅 `/imu/data`、`/joint_states`，发布 `/rl_motion_control_command`（29 维，前 12 维为下肢顺序关节位置）；与当前 leg ROS2 接口默认 topic 一致。
+## Summary
 
-### Public Interfaces / Contracts
-- 修改 [MJ_interface_v4_leg.cpp](/home/huangkun/workspaces/mpc/Openloong-dyn-control/sim_interface/MJ_interface_v4_leg.cpp)：`dataBusWrite` 的“仿真传感输入契约”改为真机等价，仅写入 IMU + 关节位置/速度 + 关节力矩；`basePos/baseLinVel/fL/fR` 置零，不再作为控制输入真值来源。
-- 修改 [PVT_ctrl_v4_leg.cpp](/home/huangkun/workspaces/mpc/Openloong-dyn-control/common/PVT_ctrl_v4_leg.cpp)：`dataBusWrite` 不再覆盖 `motors_tor_cur`，保留接口层写入的“测得力矩语义”。
-- 修改 [walk_mpc_wbc_leg.cpp](/home/huangkun/workspaces/mpc/Openloong-dyn-control/demo/walk_mpc_wbc_leg.cpp)：将“状态估计+动力学更新”前置到状态机之前，使 `applyLegControlStateMachine` 使用估计态而非接口原始 `q/rpy`。
+- 本轮只改 `walk_mpc_wbc_leg` / `speedbot_v4_leg` 主链路，AzureLoong 和 `speedbot_v4` 暂不动。
+- 将 `demo/walk_mpc_wbc_leg.cpp` 里闭环阶段硬编码的 `pvtCtr.setJointPD(...)` 改为读取 `common/joint_ctrl_config_v4_leg.json` 中新增的闭环 PVT 参数。
+- 用 MuJoCo 直行回归扫测 ankle PVT、`fz_switch_threshold/fz_stop_threshold`，选出一组默认参数。
+- 继续围绕换相突变分析：重点区分 PVT PD 项、WBC 前馈项、接触确认时序和摆动脚轻微擦地。
 
-### Implementation Changes
-- 在 [MJ_interface_v4_leg.h](/home/huangkun/workspaces/mpc/Openloong-dyn-control/sim_interface/MJ_interface_v4_leg.h) 与 [MJ_interface_v4_leg.cpp](/home/huangkun/workspaces/mpc/Openloong-dyn-control/sim_interface/MJ_interface_v4_leg.cpp) 增加并填充关节力矩缓存，来源使用 `mj_data->qfrc_actuator[jntId_qvel[i]]`（对应关节实际执行力矩）。
-- 在 [walk_mpc_wbc_leg.cpp](/home/huangkun/workspaces/mpc/Openloong-dyn-control/demo/walk_mpc_wbc_leg.cpp) 拆分控制流程为两个明确阶段：`StateEst+PinDyn(+setF)` 阶段与 `Joystick/Gait/FootPlacement/MPC/WBC` 阶段；`mujoco` 与 `ros2_real` 两条 backend 都采用相同时序。
-- 保持 ROS 话题与消息形状不变：`/imu/data`、`/joint_states`、`/rl_motion_control_command`，并保持 12 关节顺序与当前映射一致（不改接口兼容性）。
+## Key Changes
 
-### Test Plan
-- 编译回归：`cmake -S . -B build && cmake --build build -j4`，确认 `walk_mpc_wbc_leg` 可执行。
-- MuJoCo 功能回归（30s）：运行 `walk_mpc_wbc_leg`，验证 `Space/WASD/QE/J/H` 行为正常，`qpStatus_MPC` 无持续异常，步态切换无明显抖振/跌倒。
-- 数据契约验证（日志）：确认控制前端输入满足“真机等价”约束（`basePos/baseLinVel/fL/fR` 不再作为控制有效输入）；`base_pos_est/base_vel_est/base_rpy` 连续可用并驱动后续模块。
-- 力矩语义验证：确认 `motors_tor_cur` 来源为接口层测得力矩（MuJoCo `qfrc_actuator`），不被 PVT 回写覆盖；`FL_est/FR_est` 能持续输出。
-- ROS 兼容验证（仿真桥）：开启 `SIM_ENABLE_ROS2_STATE_PUB` 后检查 `/imu/data`、`/joint_states` 字段和关节顺序与 Python 脚本预期一致。
+- 在 `joint_ctrl_config_v4_leg.json` 的 12 个腿部关节中新增：
+  - `closedLoopKp`
+  - `closedLoopKd`
+- 初始值先等于当前 hardcode 行为，保证重构后 baseline 不变：
+  - hip_roll `400/15`
+  - hip_yaw `200/10`
+  - hip_pitch `300/10`
+  - knee `300/14`
+  - ankle_pitch `300/18`
+  - ankle_roll `300/16`
+- 扩展 `PVT_Ctr_V4_Leg`：
+  - 构造时读取 `closedLoopKp/closedLoopKd`。
+  - 若字段缺失则回退到原 `kp/kd`。
+  - 新增 `applyClosedLoopPD()`，一次性把 12 个关节闭环增益写入 `pvt_Kp/pvt_Kd`。
+- 替换 `walk_mpc_wbc_leg.cpp` 闭环分支：
+  - 删除当前每周期硬编码 `setJointPD(...)` 列表。
+  - 改为 `pvtCtr.applyClosedLoopPD(); pvtCtr.calMotorsPVT();`
+- 真机安全 PVT 合力矩估算同步使用 `closedLoopKp/closedLoopKd`，字段缺失时回退 `kp/kd`，保证仿真闭环和真机安全判断一致。
+- 更新现有 `check_ros2_real_leg_contract.sh`：
+  - 检查 12 个腿部关节都有 `closedLoopKp/closedLoopKd`。
+  - 检查闭环 PVT 不再使用 hardcoded `setJointPD(400...)` 这类固定值。
 
-### Assumptions / Defaults
-- 本阶段仅改 leg 链路，不改 Azure/v4 非 leg 可执行。
-- 保持真机输出接口为位置命令（`/rl_motion_control_command` 29 维）不变。
-- 真机暂不依赖足底触地传感，接触估计继续由状态估计/动力学链路提供。
-- `ros2_real` backend 在同一时序重构后仅做一致性核对，不引入新的通信协议改动。
+## Parameter Sweep
+
+- 固定已有换相保护：
+  - `phase_transition_blend_time_sec = 0.02`
+  - `contact_confirm_time_sec = 0.02`
+  - `contact_force_blend_time_sec = 0.03`
+- 第一组确认重构等价：
+  - `closedLoopKp/Kd` 使用当前 hardcode 等价值。
+  - 指标应接近当前 baseline：left/right ankle pitch 满额饱和约 `60/18ms`。
+- 第二组只扫 ankle，hip/knee 保持当前值：
+  - A0：ankle_pitch `300/18`，ankle_roll `300/16`
+  - A1：ankle_pitch `260/18`，ankle_roll `260/16`
+  - A2：ankle_pitch `240/18`，ankle_roll `240/16`
+  - A3：ankle_pitch `220/18`，ankle_roll `220/16`
+  - A4：ankle_pitch `220/20`，ankle_roll `220/18`
+  - A5：ankle_pitch `200/20`，ankle_roll `200/18`
+- 在 ankle 最优组基础上扫 `fz`：
+  - F0：`280/200`
+  - F1：`240/180`
+  - F2：`220/160`
+  - F3：`200/160`
+  - F4：`180/160`
+- 若 ankle 调参后 knee 的 `0.5*maxTorque` 占用仍明显偏高，再追加 hip/knee 轻量扫测：
+  - H0：当前值
+  - H1：hip_pitch/knee `280/10`、`280/14`
+  - H2：hip_pitch/knee `260/10`、`260/14`
+
+## Selection Rule
+
+- 每组跑 3 次正常直行回归：
+  - `CONTROL_MODE=mujoco MUJOCO_REGRESSION_SCRIPT=1 MUJOCO_REGRESSION_SIM_END=30 ./build/walk_mpc_wbc_leg`
+- 只统计 `motionState=Walk` 段。
+- 先剔除不合格组：
+  - 行走段不足 `15.5s`
+  - 换腿次数明显异常
+  - ankle pitch 最大速度 `>= 6.7rad/s`
+  - ankle pitch 满额 `42Nm` 饱和 `>= 100ms`
+  - knee 出现满额饱和
+  - 行走提前摔倒或 QP 连续异常
+- 合格组按以下顺序选最优：
+  - ankle pitch 左右满额饱和总时长最小。
+  - ankle pitch `0.5*maxTorque` 占用时长最小。
+  - knee `0.5*maxTorque` 占用不高于当前 baseline。
+  - 换相后 `0..80ms` 内 `q_des/tau_ff/tau_out/dq_cur` 峰值更小。
+  - 若指标接近，优先选择更高 `kp`，保留跟踪刚度。
+
+## 换相突变继续分析
+
+- 使用现有日志，不新增脚本文件；用临时解析命令输出报告。
+- 每次换相统计：
+  - 新支撑腿 `FL_est/FRest` 达阈值时间。
+  - MuJoCo touch truth 首次超过 `20/100/280N` 时间。
+  - 触地时足端高度、足端竖直速度。
+  - 换相后 `0..80ms` ankle/knee 的 `q_des` 跳变、`tau_ff` 跳变、`tau_out` 饱和时长、`dq_cur` 峰值。
+- 对突变来源做判定：
+  - 若 `tau_ff` 跳变大且 `q_des` 平滑，优先调 WBC/contact force transition。
+  - 若 `q_des` 跳变大，优先调命令过渡或 swing foot trajectory。
+  - 若 touch truth 早于估计力较多，优先降低 `fz_switch_threshold` 或调整 confirm 时间。
+  - 若摆动脚在支撑相中 `touch > 20N` 占比仍高，优先测试 `z_stretch_step` 减小或关闭、`step_height` 小幅增加。
+- 若 PVT 和 `fz` 扫测后 ankle `0.5*maxTorque` 占用仍长，追加轻量轨迹扫测：
+  - T0：当前 `step_height=0.06`，`z_stretch_step=-0.005`
+  - T1：`step_height=0.07`，`z_stretch_step=-0.003`
+  - T2：`step_height=0.07`，`z_stretch_step=0.0`
+
+## Test Plan
+
+- 构建与静态检查：
+  - `cmake --build build -j4`
+  - `git diff --check`
+  - `./tools/validation/check_ros2_real_leg_contract.sh`
+- 功能回归：
+  - 重构后 baseline 必须与当前 hardcode 结果接近，确认配置化没有改变行为。
+  - 参数扫测全部使用临时 config，不污染仓库；只把最终胜出参数写回 `joint_ctrl_config_v4_leg.json` 和必要的 `controller_config_v4_leg.json`。
+- 最终验收：
+  - ankle pitch 最大速度 `< 6.7rad/s`
+  - 左右 ankle pitch 满额饱和 `< 100ms`
+  - knee 无满额饱和
+  - knee `0.5*maxTorque` 占用不高于当前 baseline
+  - 行走稳定，换腿次数稳定
+  - 输出最终参数表和 baseline/最优组对比表
+
+## Assumptions
+
+- 本轮只优化 `speedbot_v4_leg`。
+- 不新增启动脚本，不新增长期维护的分析脚本。
+- 不放宽 URDF/joint limit，也不放宽真机安全阈值。
+- `kp/kd` 继续作为开环/默认 PVT 参数；`closedLoopKp/closedLoopKd` 专门用于闭环 walking PVT。

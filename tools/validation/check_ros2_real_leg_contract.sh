@@ -164,6 +164,8 @@ check_pattern "$CFG_FILE" '"ros_topic_imu"\s*:\s*"/imu/data"' "配置话题: /im
 check_pattern "$CFG_FILE" '"ros_topic_joint_states"\s*:\s*"/joint_states"' "配置话题: /joint_states"
 check_pattern "$CFG_FILE" '"ros_topic_action_cmd"\s*:\s*"/rl_motion_control_command_with_torque"' "配置话题: /rl_motion_control_command_with_torque"
 check_pattern "$CFG_FILE" '"real_pvt_torque_limit_scale"\s*:\s*0\.5' "真机PVT合力矩安全阈值比例: 0.5"
+check_pattern "$CFG_FILE" '"contact_confirm_time_sec"\s*:\s*0\.02' "换相接触确认时间: 0.02s"
+check_pattern "$CFG_FILE" '"contact_force_blend_time_sec"\s*:\s*0\.03' "新支撑腿前馈力矩渐入时间: 0.03s"
 
 check_pattern "$START_SCRIPT" 'MODE="\$\{CONTROL_MODE:-\$\{OPENLOONG_CONTROL_MODE:-ros2_real\}\}"' "启动脚本默认ros2_real"
 check_pattern "$START_SCRIPT" 'ROBOT_VARIANT="leg"' "真机启动固定leg"
@@ -186,6 +188,8 @@ check_pattern "$DEMO_FILE" 'buttonState\.key_g' "真机终端G键发布门控"
 check_pattern "$DEMO_FILE" 'bool publishEnabled = false' "ros2_real默认不发布控制消息"
 check_pattern "$DEMO_FILE" 'stopPublishingForSafety' "安全超限后停发控制消息"
 check_pattern "$DEMO_FILE" 'kp \* \(qDes - qCur\) \+ param\.kd \* \(0\.0 - dqCur\)' "PVT合力矩按PD+前馈估算"
+check_pattern "$DEMO_FILE" 'contactConfirmTimeSec = controllerConfig\.contactConfirmTimeSec' "GaitScheduler接入接触确认配置"
+check_pattern "$DEMO_FILE" 'contactForceBlendTimeSec' "换相后新支撑腿力矩渐入配置接入"
 
 check_joint_limits_match
 

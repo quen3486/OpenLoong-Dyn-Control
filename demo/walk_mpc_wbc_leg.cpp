@@ -239,6 +239,7 @@ void configureCommonLegModules(const ControllerConfig &controllerConfig,
     gaitScheduler.phiSwitchDesignMax = controllerConfig.phiSwitchDesignMax;
     gaitScheduler.fzSwitchThreshold = controllerConfig.fzSwitchThreshold;
     gaitScheduler.fzStopThreshold = controllerConfig.fzStopThreshold;
+    gaitScheduler.contactConfirmTimeSec = controllerConfig.contactConfirmTimeSec;
 
     RobotState.width_hips = 0.245;
     footPlacement.kp_vx = controllerConfig.kpVx;
@@ -519,36 +520,44 @@ void recordCommonLogger(DataLogger &logger,
 class PhaseTransitionCommandBlender
 {
 public:
-    explicit PhaseTransitionCommandBlender(double blendTimeSec)
-        : blendTimeSec_(std::clamp(blendTimeSec, 0.0, 0.2))
+    PhaseTransitionCommandBlender(double blendTimeSec, double contactForceBlendTimeSec)
+        : blendTimeSec_(std::clamp(blendTimeSec, 0.0, 0.2)),
+          contactForceBlendTimeSec_(std::clamp(contactForceBlendTimeSec, 0.0, 0.2))
     {
     }
 
     void reset()
     {
         active_ = false;
+        forceBlendActive_ = false;
         elapsed_ = 0.0;
+        forceBlendElapsed_ = 0.0;
         hasLastCommand_ = false;
         lastLegState_ = DataBus::DSt;
+        forceBlendLegState_ = DataBus::DSt;
         lastPosCommand_.clear();
         lastTorCommand_.clear();
         startPosCommand_.clear();
         startTorCommand_.clear();
+        startForceTorCommand_.clear();
     }
 
     void apply(DataBus &state, double dt, bool enabled)
     {
         const bool validCommand = state.motors_pos_des.size() == state.motors_tor_des.size() &&
                                   !state.motors_pos_des.empty();
-        const bool canBlend = enabled && state.motionState == DataBus::Walk && validCommand &&
-                              blendTimeSec_ > 0.0;
+        const bool canBlend = enabled && state.motionState == DataBus::Walk && validCommand;
 
         if (!canBlend)
         {
             active_ = false;
+            forceBlendActive_ = false;
             rememberCommand(state);
             return;
         }
+
+        const std::vector<double> targetPos = state.motors_pos_des;
+        const std::vector<double> targetTor = state.motors_tor_des;
 
         const bool legSwitched = hasLastCommand_ &&
                                  lastLegState_ != DataBus::DSt &&
@@ -559,14 +568,19 @@ public:
             startPosCommand_ = lastPosCommand_;
             startTorCommand_ = lastTorCommand_;
             elapsed_ = 0.0;
-            active_ = startPosCommand_.size() == state.motors_pos_des.size() &&
+            active_ = blendTimeSec_ > 0.0 &&
+                      startPosCommand_.size() == state.motors_pos_des.size() &&
                       startTorCommand_.size() == state.motors_tor_des.size();
+
+            startForceTorCommand_ = lastTorCommand_;
+            forceBlendElapsed_ = 0.0;
+            forceBlendLegState_ = state.legState;
+            forceBlendActive_ = contactForceBlendTimeSec_ > 0.0 &&
+                                startForceTorCommand_.size() == state.motors_tor_des.size();
         }
 
         if (active_)
         {
-            const std::vector<double> targetPos = state.motors_pos_des;
-            const std::vector<double> targetTor = state.motors_tor_des;
             const double ratio = std::clamp(elapsed_ / blendTimeSec_, 0.0, 1.0);
             const double alpha = ratio * ratio * (3.0 - 2.0 * ratio);
             for (size_t i = 0; i < targetPos.size(); ++i)
@@ -579,6 +593,26 @@ public:
             if (elapsed_ >= blendTimeSec_)
             {
                 active_ = false;
+            }
+        }
+
+        if (forceBlendActive_)
+        {
+            const double ratio = std::clamp(forceBlendElapsed_ / contactForceBlendTimeSec_, 0.0, 1.0);
+            const double beta = ratio * ratio * (3.0 - 2.0 * ratio);
+            const int begin = (forceBlendLegState_ == DataBus::LSt) ? 0 : 6;
+            const int end = begin + 6;
+            for (int i = begin; i < end && i < static_cast<int>(targetTor.size()); ++i)
+            {
+                state.motors_tor_des[static_cast<size_t>(i)] =
+                    (1.0 - beta) * startForceTorCommand_[static_cast<size_t>(i)] +
+                    beta * targetTor[static_cast<size_t>(i)];
+            }
+
+            forceBlendElapsed_ += std::max(dt, 0.0);
+            if (forceBlendElapsed_ >= contactForceBlendTimeSec_)
+            {
+                forceBlendActive_ = false;
             }
         }
 
@@ -603,14 +637,19 @@ private:
     }
 
     double blendTimeSec_{0.0};
+    double contactForceBlendTimeSec_{0.0};
     double elapsed_{0.0};
+    double forceBlendElapsed_{0.0};
     bool active_{false};
+    bool forceBlendActive_{false};
     bool hasLastCommand_{false};
     DataBus::LegState lastLegState_{DataBus::DSt};
+    DataBus::LegState forceBlendLegState_{DataBus::DSt};
     std::vector<double> lastPosCommand_;
     std::vector<double> lastTorCommand_;
     std::vector<double> startPosCommand_;
     std::vector<double> startTorCommand_;
+    std::vector<double> startForceTorCommand_;
 };
 
 class TerminalKeyReader
@@ -1389,7 +1428,8 @@ int runMujoco(const ControllerConfig &controllerConfig)
     PVT_Ctr_V4_Leg pvtCtr(mainCtrlDt, "../common/joint_ctrl_config_v4_leg.json");
     FootPlacement footPlacement;
     JoyStickInterpreter jsInterp(mainCtrlDt);
-    PhaseTransitionCommandBlender commandBlender(controllerConfig.phaseTransitionBlendTimeSec);
+    PhaseTransitionCommandBlender commandBlender(controllerConfig.phaseTransitionBlendTimeSec,
+                                                controllerConfig.contactForceBlendTimeSec);
     DataLogger logger("../record/datalog.log");
     StateEst StateModule(mainCtrlDt);
     ROS2_StatePub_V4_Leg simRos2StatePub;
@@ -1637,7 +1677,8 @@ int runRos2Real(const ControllerConfig &controllerConfig)
 
     int mpcCtrlCount = mpcCtrlDecimation - 1;
     EstimatorTruthLog truthLog;
-    PhaseTransitionCommandBlender commandBlender(controllerConfig.phaseTransitionBlendTimeSec);
+    PhaseTransitionCommandBlender commandBlender(controllerConfig.phaseTransitionBlendTimeSec,
+                                                controllerConfig.contactForceBlendTimeSec);
     double ctrlTime = 0.0;
     bool openLoopPhaseActive = true;
     bool publishEnabled = false;

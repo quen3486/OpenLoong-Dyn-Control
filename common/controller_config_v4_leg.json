@@ -11,6 +11,7 @@
   "main_control_dt": 0.001,      // 主控制链路周期(s)，默认1kHz
   "mpc_control_dt": 0.005,       // MPC求解周期(s)，默认200Hz
   "phase_transition_blend_time_sec": 0.02, // Walk换相后命令平滑时间(s)，降低落脚冲击
+  "contact_force_blend_time_sec": 0.03,    // Walk换相后新支撑腿WBC前馈力矩渐入时间(s)
 
   // ===== 步态调度（GaitScheduler） =====
   "t_swing": 0.4,                // 单步摆动时间(s)
@@ -23,6 +24,7 @@
   "phi_switch_design_max": 0.9,  // 自动设计上限
   "fz_switch_threshold": 280.0,  // 行走中换腿触地力阈值(N)
   "fz_stop_threshold": 200.0,    // Walk2Stand 触地力阈值(N)
+  "contact_confirm_time_sec": 0.02, // 换腿前估计触地力需连续超过阈值的时间(s)
 
   // ===== 落脚规划（FootPlacement） =====
   "foot_kp_vx": 0.03,            // 前后速度反馈增益
@@ -49,7 +51,7 @@
   "turn_rate_cmd": 0.2,          // 左右转目标角速度(rad/s)
 
   // ===== Demo速度档位 =====
-  "forward_speed_default": 0.4,  // 默认前进速度(m/s)
+  "forward_speed_default": 0.3,  // 默认前进速度(m/s)
   "speed_step": 0.1,             // 每次调速步进(m/s)
   "speed_max": 1.2,              // 速度上限(m/s)
   "speed_min": 0.0,              // 速度下限(m/s)

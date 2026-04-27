@@ -29,6 +29,7 @@ struct ControllerConfig
     double mainControlDt{0.001};
     double mpcControlDt{0.005};
     double phaseTransitionBlendTimeSec{0.02};
+    double contactForceBlendTimeSec{0.03};
 
     // Gait scheduler / phase switching
     double tSwing{0.4};
@@ -41,6 +42,7 @@ struct ControllerConfig
     double phiSwitchDesignMax{0.9};
     double fzSwitchThreshold{280.0};
     double fzStopThreshold{200.0};
+    double contactConfirmTimeSec{0.02};
 
     // Foot placement
     double kpVx{0.03};

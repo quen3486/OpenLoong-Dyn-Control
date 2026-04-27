@@ -60,6 +60,9 @@ private:
     int touchSensorLId;
     int touchSensorRId;
     int baseBodyId;
+    int floorGeomId{-1};
+    int leftFootBodyId{-1};
+    int rightFootBodyId{-1};
 
     double timeStep{0.001};
     bool isIni{false};
