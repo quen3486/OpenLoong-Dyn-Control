@@ -15,6 +15,8 @@ PVT_Ctr_V4_Leg::PVT_Ctr_V4_Leg(double timeStepIn, const char *jsonPath) {
     motor_tor_out_motor.assign(jointNum,0);
     pvt_Kp.assign(jointNum,0);
     pvt_Kd.assign(jointNum,0);
+    closedLoopKp.assign(jointNum,0);
+    closedLoopKd.assign(jointNum,0);
     maxTor.assign(jointNum,400);
     maxVel.assign(jointNum,50);
     maxPos.assign(jointNum,3.14);
@@ -28,14 +30,21 @@ PVT_Ctr_V4_Leg::PVT_Ctr_V4_Leg(double timeStepIn, const char *jsonPath) {
 
     reader.parse(in,root_read);
     for (int i=0;i<jointNum;i++){
-        pvt_Kp[i]=root_read[motorName[i]]["kp"].asDouble();
-        pvt_Kd[i]=root_read[motorName[i]]["kd"].asDouble();
-        maxTor[i]=root_read[motorName[i]]["maxTorque"].asDouble();
-        maxVel[i]=root_read[motorName[i]]["maxSpeed"].asDouble();
-        maxPos[i]=root_read[motorName[i]]["maxPos"].asDouble();
-        minPos[i]=root_read[motorName[i]]["minPos"].asDouble();
-        double fc=root_read[motorName[i]]["PVT_LPF_Fc"].asDouble();
-        gear[i] = root_read[motorName[i]]["gear"].asDouble();
+        const Json::Value &joint = root_read[motorName[i]];
+        pvt_Kp[i]=joint["kp"].asDouble();
+        pvt_Kd[i]=joint["kd"].asDouble();
+        closedLoopKp[i]=joint.isMember("closedLoopKp") && joint["closedLoopKp"].isNumeric()
+                            ? joint["closedLoopKp"].asDouble()
+                            : pvt_Kp[i];
+        closedLoopKd[i]=joint.isMember("closedLoopKd") && joint["closedLoopKd"].isNumeric()
+                            ? joint["closedLoopKd"].asDouble()
+                            : pvt_Kd[i];
+        maxTor[i]=joint["maxTorque"].asDouble();
+        maxVel[i]=joint["maxSpeed"].asDouble();
+        maxPos[i]=joint["maxPos"].asDouble();
+        minPos[i]=joint["minPos"].asDouble();
+        double fc=joint["PVT_LPF_Fc"].asDouble();
+        gear[i] = joint["gear"].asDouble();
         tau_out_lpf[i].setPara(fc, timeStepIn);
         tau_out_lpf[i].ftOut(0);
     }
@@ -67,6 +76,14 @@ void PVT_Ctr_V4_Leg::setJointPD(double kp, double kd, const char *jointName) {
     }
     pvt_Kp[id]=kp;
     pvt_Kd[id]=kd;
+}
+
+void PVT_Ctr_V4_Leg::applyClosedLoopPD() {
+    for (int i=0;i<jointNum;i++)
+    {
+        pvt_Kp[i]=closedLoopKp[i];
+        pvt_Kd[i]=closedLoopKd[i];
+    }
 }
 
 void PVT_Ctr_V4_Leg::calMotorsPVT() {

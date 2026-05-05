@@ -1,0 +1,19 @@
+---
+transforms:
+- header:
+    stamp:
+      sec: 1777465782
+      nanosec: 73715080
+    frame_id: world
+  child_frame_id: base_link
+  transform:
+    translation:
+      x: 0.0
+      y: 0.0
+      z: 0.0
+    rotation:
+      x: 7.147371485086453e-07
+      y: -0.009679137449464132
+      z: -2.753445804614993e-07
+      w: 0.999953156051646
+---

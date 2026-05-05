@@ -3,7 +3,7 @@
  * - "mujoco" backend: MPC + WBC walking demo in MuJoCo.
  * - "ros2_real" backend: MPC + WBC real-robot control via ROS2 topics.
  *
- * Backend/mode is selected by environment variable CONTROL_MODE.
+ * Direct execution runs MuJoCo. Use --ros2-real for the real-robot backend.
  */
 #include <mujoco/mujoco.h>
 #include <GLFW/glfw3.h>
@@ -106,6 +106,31 @@ bool parseDoubleEnv(const char *envValue, double &outValue)
     return true;
 }
 
+std::string getJointCtrlConfigV4LegPath()
+{
+    if (const char *env = getEnvEither("OPENLOONG_JOINT_CTRL_CONFIG", "JOINT_CTRL_CONFIG"); env != nullptr && std::string(env).size() > 0)
+    {
+        return std::string(env);
+    }
+    return "../common/joint_ctrl_config_v4_leg.json";
+}
+
+bool hasArg(int argc, char **argv, const char *target)
+{
+    if (target == nullptr)
+    {
+        return false;
+    }
+    for (int i = 1; i < argc; i++)
+    {
+        if (argv[i] != nullptr && std::string(argv[i]) == target)
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
 struct MujocoRegressionScript
 {
     bool enabled{false};
@@ -162,7 +187,7 @@ MujocoRegressionScript loadMujocoRegressionScriptFromEnv()
     double tmp = 0.0;
     if (parseDoubleEnv(getEnvEither("MUJOCO_REGRESSION_SIM_END", "OPENLOONG_MUJOCO_REGRESSION_SIM_END"), tmp))
     {
-        script.simEndTime = std::clamp(tmp, 20.0, 300.0);
+        script.simEndTime = std::clamp(tmp, 10.0, 300.0);
     }
     if (parseDoubleEnv(getEnvEither("MUJOCO_REGRESSION_CLOSE_LOOP_T", "OPENLOONG_MUJOCO_REGRESSION_CLOSE_LOOP_T"), tmp))
     {
@@ -181,45 +206,6 @@ MujocoRegressionScript loadMujocoRegressionScriptFromEnv()
     script.tPressW = walkBase + 0.2;
 
     return script;
-}
-
-void applyControllerEnvOverrides(ControllerConfig &cfg)
-{
-    if (const char *modeEnv = getEnvEither("CONTROL_MODE", "OPENLOONG_CONTROL_MODE"); modeEnv != nullptr)
-    {
-        const std::string mode = toLowerCopy(std::string(modeEnv));
-        if (mode == "mujoco")
-        {
-            cfg.controlBackend = "mujoco";
-            cfg.simEnableRos2StatePub = false;
-        }
-        else if (mode == "mujoco_ros2")
-        {
-            cfg.controlBackend = "mujoco";
-            cfg.simEnableRos2StatePub = true;
-        }
-        else if (mode == "ros2_real")
-        {
-            cfg.controlBackend = "ros2_real";
-            cfg.simEnableRos2StatePub = false;
-        }
-    }
-
-    bool boolTmp = false;
-    if (parseBoolEnv(getEnvEither("SIM_ENABLE_ROS2_STATE_PUB", "OPENLOONG_SIM_ENABLE_ROS2_STATE_PUB"), boolTmp))
-    {
-        cfg.simEnableRos2StatePub = boolTmp;
-    }
-
-    if (const char *simPubDtEnv = getEnvEither("SIM_ROS_PUBLISH_DT", "OPENLOONG_SIM_ROS_PUBLISH_DT"); simPubDtEnv != nullptr)
-    {
-        char *endPtr = nullptr;
-        const double v = std::strtod(simPubDtEnv, &endPtr);
-        if (endPtr != simPubDtEnv)
-        {
-            cfg.simRosPublishDt = std::clamp(v, 1e-3, 0.1);
-        }
-    }
 }
 
 void configureCommonLegModules(const ControllerConfig &controllerConfig,
@@ -819,8 +805,8 @@ bool loadRealJointSafetyParams(std::vector<RealJointSafetyParam> &outParams,
                                std::string &errMsg)
 {
     const std::array<std::string, 3> candidates = {
+        getJointCtrlConfigV4LegPath(),
         "joint_ctrl_config_v4_leg.json",
-        "../common/joint_ctrl_config_v4_leg.json",
         "common/joint_ctrl_config_v4_leg.json"};
 
     Json::Value root;
@@ -871,8 +857,12 @@ bool loadRealJointSafetyParams(std::vector<RealJointSafetyParam> &outParams,
 
         RealJointSafetyParam param;
         param.name = name;
-        param.kp = joint["kp"].asDouble();
-        param.kd = joint["kd"].asDouble();
+        param.kp = joint.isMember("closedLoopKp") && joint["closedLoopKp"].isNumeric()
+                       ? joint["closedLoopKp"].asDouble()
+                       : joint["kp"].asDouble();
+        param.kd = joint.isMember("closedLoopKd") && joint["closedLoopKd"].isNumeric()
+                       ? joint["closedLoopKd"].asDouble()
+                       : joint["kd"].asDouble();
         param.minPos = joint["minPos"].asDouble();
         param.maxPos = joint["maxPos"].asDouble();
         param.maxSpeed = joint["maxSpeed"].asDouble();
@@ -1425,7 +1415,8 @@ int runMujoco(const ControllerConfig &controllerConfig)
     WBC_priority_V4_Leg WBC_solv(kinDynSolver.model_nv, 18, 22, 0.7, mainCtrlDt);
     MPC MPC_solv(mpcCtrlDt);
     GaitScheduler gaitScheduler(0.4, mainCtrlDt);
-    PVT_Ctr_V4_Leg pvtCtr(mainCtrlDt, "../common/joint_ctrl_config_v4_leg.json");
+    const std::string jointCtrlConfigPath = getJointCtrlConfigV4LegPath();
+    PVT_Ctr_V4_Leg pvtCtr(mainCtrlDt, jointCtrlConfigPath.c_str());
     FootPlacement footPlacement;
     JoyStickInterpreter jsInterp(mainCtrlDt);
     PhaseTransitionCommandBlender commandBlender(controllerConfig.phaseTransitionBlendTimeSec,
@@ -1455,9 +1446,13 @@ int runMujoco(const ControllerConfig &controllerConfig)
         }
     }
 
-    uiController.iniGLFW();
-    uiController.enableTracking();
-    uiController.createWindow("Demo_V4_Leg", false);
+    const bool headlessMode = std::getenv("OPENLOONG_HEADLESS") != nullptr;
+    if (!headlessMode)
+    {
+        uiController.iniGLFW();
+        uiController.enableTracking();
+        uiController.createWindow("Demo_V4_Leg", false);
+    }
     UIctr::ButtonState buttonState;
     std::cout << "[OpenLoop] press F to enable closed-loop walk control." << std::endl;
 
@@ -1522,10 +1517,10 @@ int runMujoco(const ControllerConfig &controllerConfig)
     mjtNum simstart = mj_data->time;
     double simTime = mj_data->time;
 
-    while (!glfwWindowShouldClose(uiController.window))
+    while (headlessMode ? (simTime < simEndTime) : (!glfwWindowShouldClose(uiController.window)))
     {
         simstart = mj_data->time;
-        while (mj_data->time - simstart < 1.0 / 60.0 && uiController.runSim)
+        while (mj_data->time - simstart < 1.0 / 60.0 && (headlessMode || uiController.runSim))
         {
             mj_step(mj_model, mj_data);
             simTime = mj_data->time;
@@ -1578,22 +1573,7 @@ int runMujoco(const ControllerConfig &controllerConfig)
             }
             else
             {
-                double kp = 1.;
-                double kd = 1.;
-
-                pvtCtr.setJointPD(400 * kp, 15 * kd, "left_hip_roll_joint");
-                pvtCtr.setJointPD(200 * kp, 10 * kd, "left_hip_yaw_joint");
-                pvtCtr.setJointPD(300 * kp, 10 * kd, "left_hip_pitch_joint");
-                pvtCtr.setJointPD(300 * kp, 14 * kd, "left_knee_joint");
-                pvtCtr.setJointPD(300 * kp, 18 * kd, "left_ankle_pitch_joint");
-                pvtCtr.setJointPD(300 * kp, 16 * kd, "left_ankle_roll_joint");
-
-                pvtCtr.setJointPD(400 * kp, 15 * kd, "right_hip_roll_joint");
-                pvtCtr.setJointPD(200 * kp, 10 * kd, "right_hip_yaw_joint");
-                pvtCtr.setJointPD(300 * kp, 10 * kd, "right_hip_pitch_joint");
-                pvtCtr.setJointPD(300 * kp, 14 * kd, "right_knee_joint");
-                pvtCtr.setJointPD(300 * kp, 18 * kd, "right_ankle_pitch_joint");
-                pvtCtr.setJointPD(300 * kp, 16 * kd, "right_ankle_roll_joint");
+                pvtCtr.applyClosedLoopPD();
                 pvtCtr.calMotorsPVT();
             }
             pvtCtr.dataBusWrite(RobotState);
@@ -1606,10 +1586,12 @@ int runMujoco(const ControllerConfig &controllerConfig)
         if (mj_data->time >= simEndTime)
             break;
 
-        uiController.updateScene();
+        if (!headlessMode)
+            uiController.updateScene();
     }
 
-    uiController.Close();
+    if (!headlessMode)
+        uiController.Close();
     return 0;
 }
 
@@ -1874,10 +1856,10 @@ int main(int argc, char **argv)
         std::cerr << "[ControllerConfig] fallback to built-in defaults: " << controllerConfigErr << std::endl;
     }
 
-    applyControllerEnvOverrides(controllerConfig);
-
-    if (controllerConfig.controlBackend == "ros2_real")
+    const bool useRos2Real = hasArg(argc, argv, "--ros2-real");
+    if (useRos2Real)
     {
+        controllerConfig.simEnableRos2StatePub = false;
         return runRos2Real(controllerConfig);
     }
     return runMujoco(controllerConfig);

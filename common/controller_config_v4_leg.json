@@ -1,11 +1,12 @@
 {
   // ===== ROS2接口（真机/仿真桥统一） =====
+  "sim_enable_ros2_state_pub": true,    // MuJoCo是否发布ROS2状态；仿真直接运行demo时按需置true
   "sim_ros_publish_dt": 0.01,           // 仿真ROS2状态发布周期(s)
   "ros_topic_imu": "/imu/data",         // IMU姿态话题
   "ros_topic_joint_states": "/joint_states", // 关节状态话题
   "ros_topic_action_cmd": "/rl_motion_control_command_with_torque", // 动作命令话题（29位置+29力矩前馈）
   "ros_data_timeout_sec": 0.2,          // 传感超时阈值(s)
-  "real_pvt_torque_limit_scale": 0.5,   // 真机PVT合力矩安全阈值比例：maxTorque * scale
+  "real_pvt_torque_limit_scale": 0.6,   // 真机PVT合力矩安全阈值比例：maxTorque * scale
 
   // ===== 控制循环频率 =====
   "main_control_dt": 0.001,      // 主控制链路周期(s)，默认1kHz
@@ -22,22 +23,22 @@
   "phi_switch_design_power": 1.0,// 自适应指数，>1 对 t_swing 变化更敏感
   "phi_switch_design_min": 0.15, // 自动设计下限
   "phi_switch_design_max": 0.9,  // 自动设计上限
-  "fz_switch_threshold": 280.0,  // 行走中换腿触地力阈值(N)
-  "fz_stop_threshold": 200.0,    // Walk2Stand 触地力阈值(N)
+  "fz_switch_threshold": 240.0,  // 行走中换腿触地力阈值(N)
+  "fz_stop_threshold": 180.0,    // Walk2Stand 触地力阈值(N)
   "contact_confirm_time_sec": 0.02, // 换腿前估计触地力需连续超过阈值的时间(s)
 
   // ===== 落脚规划（FootPlacement） =====
   "foot_kp_vx": 0.03,            // 前后速度反馈增益
   "foot_kp_vy": 0.03,            // 左右速度反馈增益
   "foot_kp_wz": 0.03,            // 偏航角速度反馈增益
-  "step_height": 0.06,           // 摆腿抬脚高度(m)
+  "step_height": 0.07,           // 摆腿抬脚高度(m)
   "x_offset_l": -0.07,           // 足端x偏置(机体坐标系, 左腿符号基准)
   "y_offset_l": 0.04,            // 足端y偏置(机体坐标系, 左腿符号基准)
   "z_offset_w": -0.035,          // 足端z偏置(世界系)
   "swing_traj_phase": 0.2,       // 摆腿轨迹上升段相位分界
   "swing_traj_window": 1.4,      // 摆腿Bezier窗口长度(>phase)
   "z_stretch_start_phi": 0.98,   // 末段压脚开始相位
-  "z_stretch_step": -0.005,      // 每周期压脚增量(m)
+  "z_stretch_step": -0.003,      // 每周期压脚增量(m)
   "z_stretch_min": -0.05,        // 压脚下限(m)
 
   // ===== 命令整形（JoyStickInterpreter） =====
@@ -51,7 +52,7 @@
   "turn_rate_cmd": 0.2,          // 左右转目标角速度(rad/s)
 
   // ===== Demo速度档位 =====
-  "forward_speed_default": 0.3,  // 默认前进速度(m/s)
+  "forward_speed_default": 0.1,  // 默认前进速度(m/s)
   "speed_step": 0.1,             // 每次调速步进(m/s)
   "speed_max": 1.2,              // 速度上限(m/s)
   "speed_min": 0.0,              // 速度下限(m/s)

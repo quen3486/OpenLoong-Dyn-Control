@@ -21,97 +21,8 @@
 #include <iostream>
 #include <algorithm>
 #include <cmath>
-#include <cctype>
 #include <cstdlib>
 #include "StateEst.h"
-
-namespace
-{
-const char *getEnvEither(const char *keyPrimary, const char *keyCompat = nullptr)
-{
-    if (keyPrimary != nullptr)
-    {
-        if (const char *v = std::getenv(keyPrimary); v != nullptr)
-        {
-            return v;
-        }
-    }
-    if (keyCompat != nullptr)
-    {
-        return std::getenv(keyCompat);
-    }
-    return nullptr;
-}
-
-std::string toLowerCopy(std::string in)
-{
-    for (char &ch : in)
-    {
-        ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
-    }
-    return in;
-}
-
-bool parseBoolEnv(const char *envValue, bool &outValue)
-{
-    if (envValue == nullptr)
-    {
-        return false;
-    }
-    std::string v = toLowerCopy(std::string(envValue));
-    if (v == "1" || v == "true" || v == "yes" || v == "on")
-    {
-        outValue = true;
-        return true;
-    }
-    if (v == "0" || v == "false" || v == "no" || v == "off")
-    {
-        outValue = false;
-        return true;
-    }
-    return false;
-}
-
-void applyControllerEnvOverrides(ControllerConfig &cfg)
-{
-    if (const char *modeEnv = getEnvEither("CONTROL_MODE", "OPENLOONG_CONTROL_MODE"); modeEnv != nullptr)
-    {
-        const std::string mode = toLowerCopy(std::string(modeEnv));
-        if (mode == "mujoco")
-        {
-            cfg.controlBackend = "mujoco";
-            cfg.simEnableRos2StatePub = false;
-        }
-        else if (mode == "mujoco_ros2")
-        {
-            cfg.controlBackend = "mujoco";
-            cfg.simEnableRos2StatePub = true;
-        }
-        else if (mode == "ros2_real")
-        {
-            cfg.controlBackend = "mujoco";
-            cfg.simEnableRos2StatePub = false;
-            std::cerr << "[Backend] ros2_real is not implemented for walk_mpc_wbc_v4, fallback to mujoco." << std::endl;
-        }
-    }
-
-    bool boolTmp = false;
-    if (parseBoolEnv(getEnvEither("SIM_ENABLE_ROS2_STATE_PUB", "OPENLOONG_SIM_ENABLE_ROS2_STATE_PUB"), boolTmp))
-    {
-        cfg.simEnableRos2StatePub = boolTmp;
-    }
-
-    if (const char *simPubDtEnv = getEnvEither("SIM_ROS_PUBLISH_DT", "OPENLOONG_SIM_ROS_PUBLISH_DT"); simPubDtEnv != nullptr)
-    {
-        char *endPtr = nullptr;
-        const double v = std::strtod(simPubDtEnv, &endPtr);
-        if (endPtr != simPubDtEnv)
-        {
-            cfg.simRosPublishDt = std::clamp(v, 1e-3, 0.1);
-        }
-    }
-}
-} // namespace
 
 char error[1000] = "Could not load binary model";
 mjModel *mj_model = mj_loadXML("../models/scene_v4.xml", 0, error, 1000);
@@ -140,7 +51,6 @@ int main(int argc, char **argv)
     {
         std::cerr << "[ControllerConfig] fallback to built-in defaults: " << controllerConfigErr << std::endl;
     }
-    applyControllerEnvOverrides(controllerConfig);
     const double simDt = mj_model->opt.timestep;
     const int mainCtrlDecimation = std::max(1, static_cast<int>(std::lround(controllerConfig.mainControlDt / simDt)));
     const double mainCtrlDt = simDt * mainCtrlDecimation;

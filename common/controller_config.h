@@ -11,10 +11,6 @@ Feel free to use in any purpose, and cite OpenLoong-Dynamics-Control in any styl
 
 struct ControllerConfig
 {
-    // Backend selection (set by OPENLOONG_CONTROL_MODE env)
-    // - "mujoco": simulation via MJ_Interface
-    // - "ros2_real": real-robot control via ROS2 topics
-    std::string controlBackend{"mujoco"};
     bool simEnableRos2StatePub{false};
     double simRosPublishDt{0.01};
 

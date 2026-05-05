@@ -1,6 +1,6 @@
 # 真机模式使用说明（speedbot_v4_leg）
 
-真机控制只保留一个统一入口：`tools/start_control_v4_leg.sh`。脚本默认固定为 `ros2_real + leg + RViz + AUTOWALK=0`。
+真机控制只保留一个统一入口：`tools/start_control_v4_leg.sh`。脚本固定启动 `ros2_real + leg + RViz`，启动后必须按 `G` 才发布控制命令。
 
 ## 1. 启动
 
@@ -37,6 +37,6 @@ tau_est = kp * (q_des - q_cur) + kd * (0 - dq_cur) + tau_ff
 abs(tau_est) <= maxTorque * real_pvt_torque_limit_scale
 ```
 
-`real_pvt_torque_limit_scale` 在 `common/controller_config_v4_leg.json` 中配置，默认 `0.5`。
+`real_pvt_torque_limit_scale` 在 `common/controller_config_v4_leg.json` 中配置，当前为 `0.6`。
 
 任一安全检查失败后，控制器立即停发动作命令，不发布保持姿态或冻结姿态。恢复方式是人工停止进程、检查现场和日志后重新启动。

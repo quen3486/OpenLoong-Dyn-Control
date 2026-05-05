@@ -27,6 +27,7 @@ public:
     void enablePV(int jtId);
     void disablePV(int jtId);
     void setJointPD(double kp, double kd, const char * jointName);
+    void applyClosedLoopPD();
     void dataBusRead(DataBus &busIn);
     void dataBusWrite(DataBus &busIn);
 
@@ -36,6 +37,8 @@ public:
 
     std::vector<double> pvt_Kp;
     std::vector<double> pvt_Kd;
+    std::vector<double> closedLoopKp;
+    std::vector<double> closedLoopKd;
     std::vector<double> maxTor;
     std::vector<double> maxVel;
     std::vector<double> maxPos;

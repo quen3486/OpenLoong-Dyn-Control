@@ -180,34 +180,24 @@ cd build
 ./walk_mpc_wbc_leg
 ```
 
-**统一启动脚本（推荐，支持模式切换）**
+**仿真 + ROS2 状态发布**
+
+仿真不再通过 `tools/start_control_v4_leg.sh` 或 `CONTROL_MODE` 选择模式。直接运行 demo；若需要发布 `/imu/data`、`/joint_states`、TF 等 ROS2 状态，在对应控制器配置中将 `sim_enable_ros2_state_pub` 置为 `true` 后再运行 demo。
+
+**真机模式（speedbot_v4_leg）**
 
 ```bash
-# 纯 MuJoCo 仿真（v4）
-CONTROL_MODE=mujoco ROBOT_VARIANT=v4 ./tools/start_control_v4_leg.sh
-
-# MuJoCo + ROS2 状态发布 + RViz（v4）
-CONTROL_MODE=mujoco_ros2 ROBOT_VARIANT=v4 START_RVIZ=1 ./tools/start_control_v4_leg.sh
-
-# MuJoCo + ROS2 状态发布 + RViz（leg）
-CONTROL_MODE=mujoco_ros2 ROBOT_VARIANT=leg START_RVIZ=1 ./tools/start_control_v4_leg.sh
-
-# 真机模式（leg 机型）
-CONTROL_MODE=ros2_real ROBOT_VARIANT=leg ./tools/start_control_v4_leg.sh
+./tools/start_control_v4_leg.sh
 ```
 
-脚本会自动检测二进制是否存在，不存在则触发构建；自动根据 `ROBOT_VARIANT` 选择对应配置与 URDF。
+该脚本只用于真机，固定启动 `walk_mpc_wbc_leg --ros2-real`、`common/controller_config_v4_leg.json` 和 RViz。启动后默认只订阅数据，不发布控制命令；按 `G` 后才开始发布。
 
 **常用运行时环境变量**
 
 | 环境变量 | 说明 | 默认值 |
 |---|---|---|
-| `CONTROL_MODE` | `mujoco` / `mujoco_ros2` / `ros2_real` | `mujoco_ros2` |
-| `ROBOT_VARIANT` | `v4` / `leg` | `leg` |
 | `OPENLOONG_CONTROLLER_CONFIG` | 控制器 JSON 配置路径 | 按机型默认 |
 | `AUTOWALK` | 自动起步（`1/0`） | `0` |
-| `START_RVIZ` | 是否启动 RViz | `1`（ROS2 模式） |
-| `SIM_ROS_PUBLISH_DT` | ROS2 状态发布周期 | `0.01` |
 | `OPENLOONG_ROS_TOPIC_IMU` | IMU 话题名 | `/imu/data` |
 | `OPENLOONG_ROS_TOPIC_JOINT_STATES` | 关节状态话题名 | `/joint_states` |
 

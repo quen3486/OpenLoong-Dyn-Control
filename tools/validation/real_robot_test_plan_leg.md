@@ -23,7 +23,7 @@ cmake --build build -j4
 ./tools/start_control_v4_leg.sh
 ```
 
-脚本固定为 `ros2_real + leg + RViz + AUTOWALK=0`。启动后不要按 `G`。
+脚本固定为 `ros2_real + leg + RViz`。启动后不要按 `G`。
 
 检查：
 - `ros2 topic hz /imu/data`
