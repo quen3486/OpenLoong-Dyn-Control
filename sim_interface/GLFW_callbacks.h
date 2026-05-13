@@ -44,6 +44,7 @@ public:
     UIctr(mjModel *modelIn, mjData *dataIn);
     void iniGLFW();
     void createWindow(const char * windowTitle, bool saveVideo);
+    void setGeomGroupVisible(int group, bool visible);
     void updateScene();
 
     // keyboard callback
@@ -70,8 +71,8 @@ private:
 
     FILE* file;
 
-    int width{1200};
-    int height{800};
+    int width{800};
+    int height{600};
     bool save_video{false};
 
     bool isTrack{false};

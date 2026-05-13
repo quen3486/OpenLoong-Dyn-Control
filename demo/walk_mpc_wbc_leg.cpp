@@ -45,22 +45,6 @@
 namespace
 {
 
-const char *getEnvEither(const char *keyPrimary, const char *keyCompat = nullptr)
-{
-    if (keyPrimary != nullptr)
-    {
-        if (const char *v = std::getenv(keyPrimary); v != nullptr)
-        {
-            return v;
-        }
-    }
-    if (keyCompat != nullptr)
-    {
-        return std::getenv(keyCompat);
-    }
-    return nullptr;
-}
-
 std::string toLowerCopy(std::string in)
 {
     for (char &ch : in)
@@ -108,7 +92,7 @@ bool parseDoubleEnv(const char *envValue, double &outValue)
 
 std::string getJointCtrlConfigV4LegPath()
 {
-    if (const char *env = getEnvEither("OPENLOONG_JOINT_CTRL_CONFIG", "JOINT_CTRL_CONFIG"); env != nullptr && std::string(env).size() > 0)
+    if (const char *env = std::getenv("JOINT_CTRL_CONFIG"); env != nullptr && std::string(env).size() > 0)
     {
         return std::string(env);
     }
@@ -182,22 +166,22 @@ struct MujocoRegressionScript
 MujocoRegressionScript loadMujocoRegressionScriptFromEnv()
 {
     MujocoRegressionScript script;
-    parseBoolEnv(getEnvEither("MUJOCO_REGRESSION_SCRIPT", "OPENLOONG_MUJOCO_REGRESSION_SCRIPT"), script.enabled);
+    parseBoolEnv(std::getenv("MUJOCO_REGRESSION_SCRIPT"), script.enabled);
 
     double tmp = 0.0;
-    if (parseDoubleEnv(getEnvEither("MUJOCO_REGRESSION_SIM_END", "OPENLOONG_MUJOCO_REGRESSION_SIM_END"), tmp))
+    if (parseDoubleEnv(std::getenv("MUJOCO_REGRESSION_SIM_END"), tmp))
     {
         script.simEndTime = std::clamp(tmp, 10.0, 300.0);
     }
-    if (parseDoubleEnv(getEnvEither("MUJOCO_REGRESSION_CLOSE_LOOP_T", "OPENLOONG_MUJOCO_REGRESSION_CLOSE_LOOP_T"), tmp))
+    if (parseDoubleEnv(std::getenv("MUJOCO_REGRESSION_CLOSE_LOOP_T"), tmp))
     {
         script.tCloseLoop = std::clamp(tmp, 0.5, script.simEndTime - 5.0);
     }
-    if (parseDoubleEnv(getEnvEither("MUJOCO_REGRESSION_WALK_START_T", "OPENLOONG_MUJOCO_REGRESSION_WALK_START_T"), tmp))
+    if (parseDoubleEnv(std::getenv("MUJOCO_REGRESSION_WALK_START_T"), tmp))
     {
         script.tWalkStart = std::clamp(tmp, script.tCloseLoop + 0.5, script.simEndTime - 3.0);
     }
-    if (parseDoubleEnv(getEnvEither("MUJOCO_REGRESSION_STOP_T", "OPENLOONG_MUJOCO_REGRESSION_STOP_T"), tmp))
+    if (parseDoubleEnv(std::getenv("MUJOCO_REGRESSION_STOP_T"), tmp))
     {
         script.tPressJ = std::clamp(tmp, script.tWalkStart + 6.0, script.simEndTime - 0.5);
     }
@@ -882,13 +866,13 @@ public:
         : jointParams_(jointParams),
           pvtTorqueLimitScale_(config.realPvtTorqueLimitScale)
     {
-        parseBoolEnv(getEnvEither("OPENLOONG_REAL_SAFETY_ENABLE", "REAL_SAFETY_ENABLE"), enabled_);
+        parseBoolEnv(std::getenv("REAL_SAFETY_ENABLE"), enabled_);
         double tmp = 0.0;
-        if (parseDoubleEnv(getEnvEither("OPENLOONG_REAL_SAFETY_ROLL_PITCH_LIMIT_DEG", "REAL_SAFETY_ROLL_PITCH_LIMIT_DEG"), tmp))
+        if (parseDoubleEnv(std::getenv("REAL_SAFETY_ROLL_PITCH_LIMIT_DEG"), tmp))
             rollPitchLimitRad_ = std::max(1.0, tmp) * kDeg2Rad;
-        if (parseDoubleEnv(getEnvEither("OPENLOONG_REAL_SAFETY_ANGVEL_LIMIT_RAD_S", "REAL_SAFETY_ANGVEL_LIMIT_RAD_S"), tmp))
+        if (parseDoubleEnv(std::getenv("REAL_SAFETY_ANGVEL_LIMIT_RAD_S"), tmp))
             angVelLimitRadS_ = std::max(0.1, tmp);
-        if (parseDoubleEnv(getEnvEither("OPENLOONG_REAL_SAFETY_CMD_JUMP_LIMIT_RAD", "REAL_SAFETY_CMD_JUMP_LIMIT_RAD"), tmp))
+        if (parseDoubleEnv(std::getenv("REAL_SAFETY_CMD_JUMP_LIMIT_RAD"), tmp))
             cmdJumpLimitRad_ = std::max(0.001, tmp);
     }
 
@@ -1446,7 +1430,7 @@ int runMujoco(const ControllerConfig &controllerConfig)
         }
     }
 
-    const bool headlessMode = std::getenv("OPENLOONG_HEADLESS") != nullptr;
+    const bool headlessMode = std::getenv("HEADLESS") != nullptr;
     if (!headlessMode)
     {
         uiController.iniGLFW();
@@ -1844,7 +1828,7 @@ int main(int argc, char **argv)
     controllerConfig.speedMin = 0.0;
     controllerConfig.turnRateCmd = 0.2;
 
-    const char *cfgEnv = std::getenv("OPENLOONG_CONTROLLER_CONFIG");
+    const char *cfgEnv = std::getenv("CONTROLLER_CONFIG");
     const std::string cfgPath = (cfgEnv != nullptr && std::string(cfgEnv).size() > 0)
                                     ? std::string(cfgEnv)
                                     : std::string("../common/controller_config_v4_leg.json");

@@ -109,6 +109,47 @@ struct DataBus
     Eigen::Vector3d swing_fe_rpy_des_W;
     Eigen::Vector3d stance_fe_pos_cur_W;
     Eigen::Matrix3d stance_fe_rot_cur_W;
+    Eigen::Vector3d weld_tcp_pos_des_W;
+    Eigen::Matrix3d weld_tcp_rot_des_W;
+    Eigen::Vector3d weld_tcp_linear_vel_des_W;
+    Eigen::Vector3d weld_tcp_angular_vel_des_W;
+    Eigen::Vector3d weld_tcp_linear_acc_des_W;
+    Eigen::Vector3d weld_tcp_angular_acc_des_W;
+    Eigen::Vector3d weld_tcp_pos_cur_W;
+    Eigen::Vector3d weld_tcp_pos_err_W;
+    Eigen::Vector3d weld_tcp_rot_err_W;
+    Eigen::Vector3d weld_ang_momentum;
+    Eigen::VectorXd weld_left_arm_q;
+    Eigen::VectorXd weld_left_arm_balance_vel;
+    Eigen::Vector3d weld_base_ref_W;
+    Eigen::Vector3d weld_base_delta_W;
+    Eigen::Vector3d weld_com_ref_W;
+    Eigen::Vector3d weld_com_delta_W;
+    Eigen::Vector3d weld_base_rpy_ref;
+    Eigen::Vector3d weld_base_rpy_delta;
+    double weld_h_ang_norm{0.0};
+    double weld_left_arm_vel_norm{0.0};
+    double weld_base_delta_norm{0.0};
+    double weld_com_delta_norm{0.0};
+    Eigen::Vector3d weld_stance_foot_l_W;
+    Eigen::Vector3d weld_stance_foot_r_W;
+    Eigen::VectorXd weld_stance_left_arm_q;
+    double weld_cop_margin{0.0};
+    double weld_tau_margin{0.0};
+    double weld_clearance_margin{0.0};
+    double weld_preapproach_clearance{0.0};
+    double weld_recover_phase{0.0};
+    double weld_phase{0.0};
+    double weld_segment_index{-1.0};
+    bool weld_active{false};
+    bool weld_trajectory_valid{false};
+    bool weld_stance_valid{false};
+    Eigen::Vector4d weld_stance_base_xyz_yaw;
+    double weld_stance_score{0.0};
+    double weld_stance_max_ik_err{0.0};
+    double weld_stance_min_limit_margin{0.0};
+    double weld_stance_com_margin{0.0};
+    double weld_prepare_phase{0.0};
     Eigen::VectorXd wbc_delta_q_final, wbc_dq_final, wbc_ddq_final;
     Eigen::VectorXd wbc_tauJointRes;
     Eigen::VectorXd wbc_FrRes;
@@ -135,7 +176,11 @@ struct DataBus
     {
         Stand,
         Walk,
-        Walk2Stand
+        Walk2Stand,
+        WeldPrepare,
+        Weld,
+        WeldHold,
+        WeldRecover
     };
     enum LegState
     {
@@ -199,6 +244,47 @@ struct DataBus
         swingDesPosCur_W.setZero();
         swingDesPosCur_L.setZero();
         swingDesPosFinal_W.setZero();
+        weld_tcp_pos_des_W.setZero();
+        weld_tcp_rot_des_W.setIdentity();
+        weld_tcp_linear_vel_des_W.setZero();
+        weld_tcp_angular_vel_des_W.setZero();
+        weld_tcp_linear_acc_des_W.setZero();
+        weld_tcp_angular_acc_des_W.setZero();
+        weld_tcp_pos_cur_W.setZero();
+        weld_tcp_pos_err_W.setZero();
+        weld_tcp_rot_err_W.setZero();
+        weld_ang_momentum.setZero();
+        weld_left_arm_q = Eigen::VectorXd::Zero(5);
+        weld_left_arm_balance_vel = Eigen::VectorXd::Zero(5);
+        weld_base_ref_W.setZero();
+        weld_base_delta_W.setZero();
+        weld_com_ref_W.setZero();
+        weld_com_delta_W.setZero();
+        weld_base_rpy_ref.setZero();
+        weld_base_rpy_delta.setZero();
+        weld_h_ang_norm = 0.0;
+        weld_left_arm_vel_norm = 0.0;
+        weld_base_delta_norm = 0.0;
+        weld_com_delta_norm = 0.0;
+        weld_stance_foot_l_W.setZero();
+        weld_stance_foot_r_W.setZero();
+        weld_stance_left_arm_q = Eigen::VectorXd::Zero(5);
+        weld_cop_margin = 0.0;
+        weld_tau_margin = 0.0;
+        weld_clearance_margin = 0.0;
+        weld_preapproach_clearance = 0.0;
+        weld_recover_phase = 0.0;
+        weld_phase = 0.0;
+        weld_segment_index = -1.0;
+        weld_active = false;
+        weld_trajectory_valid = false;
+        weld_stance_valid = false;
+        weld_stance_base_xyz_yaw.setZero();
+        weld_stance_score = 0.0;
+        weld_stance_max_ik_err = 0.0;
+        weld_stance_min_limit_margin = 0.0;
+        weld_stance_com_margin = 0.0;
+        weld_prepare_phase = 0.0;
         stanceDesPos_W.setZero();
         posHip_W.setZero();
         posST_W.setZero();

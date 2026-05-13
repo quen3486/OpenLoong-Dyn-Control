@@ -7,7 +7,63 @@
  *   (fixed-base model uses the same ordering, indices 0-21)
  */
 #include "pino_kin_dyn_v4.h"
+#include <algorithm>
+#include <cmath>
+#include <fstream>
+#include <iostream>
 #include <utility>
+
+namespace
+{
+
+Eigen::Vector3d rightWeldTcpOffsetLocal()
+{
+    return Eigen::Vector3d(0.0, -0.215, 0.0);
+}
+
+Eigen::Matrix3d skewMatrix(const Eigen::Vector3d &v)
+{
+    Eigen::Matrix3d skew;
+    skew << 0.0, -v.z(), v.y(),
+            v.z(), 0.0, -v.x(),
+            -v.y(), v.x(), 0.0;
+    return skew;
+}
+
+Eigen::Vector3d rightWeldTcpPosition(const pinocchio::SE3 &wristPose)
+{
+    return wristPose.translation() + wristPose.rotation() * rightWeldTcpOffsetLocal();
+}
+
+template <typename JacobianDerived>
+void shiftSpatialJacobianToPoint(Eigen::MatrixBase<JacobianDerived> &jacobian, const Eigen::Vector3d &offset_W)
+{
+    if (jacobian.rows() < 6)
+    {
+        return;
+    }
+    jacobian.derived().topRows(3) -= skewMatrix(offset_W) * jacobian.derived().block(3, 0, 3, jacobian.cols());
+}
+
+template <typename DJacobianDerived, typename JacobianDerived>
+void shiftSpatialJacobianTimeVariationToPoint(Eigen::MatrixBase<DJacobianDerived> &dJacobian,
+                                              const Eigen::MatrixBase<JacobianDerived> &wristJacobian,
+                                              const Eigen::Vector3d &offset_W,
+                                              const Eigen::VectorXd &dq)
+{
+    if (dJacobian.rows() < 6 || wristJacobian.rows() < 6 || dq.size() != wristJacobian.cols())
+    {
+        return;
+    }
+    const Eigen::MatrixXd wristAngularJacobian = wristJacobian.derived().block(3, 0, 3, wristJacobian.cols());
+    const Eigen::Vector3d wristOmega = wristAngularJacobian * dq;
+    const Eigen::Vector3d offsetDot_W = wristOmega.cross(offset_W);
+    dJacobian.derived().topRows(3) -=
+        skewMatrix(offset_W) * dJacobian.derived().block(3, 0, 3, dJacobian.cols()) +
+        skewMatrix(offsetDot_W) * wristAngularJacobian;
+}
+
+} // namespace
 
 Pin_KinDyn_V4::Pin_KinDyn_V4(std::string urdf_pathIn)
 {
@@ -55,15 +111,35 @@ Pin_KinDyn_V4::Pin_KinDyn_V4(std::string urdf_pathIn)
     r_hip_joint_fixed = model_biped_fixed.getJointId("right_hip_yaw_joint");
     l_hip_joint_fixed = model_biped_fixed.getJointId("left_hip_yaw_joint");
     base_joint = model_biped.getJointId("root_joint");
-    // read joint pvt parameters
-    Json::Reader reader;
-    Json::Value root_read;
-    std::ifstream in("joint_ctrl_config_v4.json", std::ios::binary);
-
     motorMaxTorque = Eigen::VectorXd::Zero(motorName.size());
     motorMaxPos = Eigen::VectorXd::Zero(motorName.size());
     motorMinPos = Eigen::VectorXd::Zero(motorName.size());
-    reader.parse(in, root_read);
+
+    Json::Reader reader;
+    Json::Value root_read;
+    std::ifstream in;
+    const std::vector<std::string> jointConfigCandidates = {
+        "joint_ctrl_config_v4.json",
+        "../common/joint_ctrl_config_v4.json",
+        "common/joint_ctrl_config_v4.json"};
+    for (const auto &path : jointConfigCandidates)
+    {
+        in.open(path, std::ios::binary);
+        if (in.good())
+        {
+            if (!reader.parse(in, root_read))
+            {
+                std::cerr << "[Pin_KinDyn_V4] failed to parse " << path << std::endl;
+            }
+            break;
+        }
+        in.close();
+    }
+    if (root_read.empty())
+    {
+        std::cerr << "[Pin_KinDyn_V4] failed to load joint_ctrl_config_v4.json; "
+                  << "joint limits/torque limits remain zero." << std::endl;
+    }
     for (int i = 0; i < (int)motorName.size(); i++)
     {
         motorMaxTorque(i) = (root_read[motorName[i]]["maxTorque"].asDouble());
@@ -162,6 +238,11 @@ void Pin_KinDyn_V4::computeJ_dJ()
     pinocchio::getJointJacobianTimeVariation(model_biped, data_biped, r_hand_joint, pinocchio::LOCAL_WORLD_ALIGNED, dJ_hd_r);
     pinocchio::getJointJacobianTimeVariation(model_biped, data_biped, l_hand_joint, pinocchio::LOCAL_WORLD_ALIGNED, dJ_hd_l);
     pinocchio::getJointJacobianTimeVariation(model_biped, data_biped, base_joint, pinocchio::LOCAL_WORLD_ALIGNED, dJ_base);
+    const Eigen::Vector3d rHandTcpOffset_W =
+        data_biped.oMi[r_hand_joint].rotation() * rightWeldTcpOffsetLocal();
+    const Eigen::MatrixXd J_hd_r_wrist = J_hd_r;
+    shiftSpatialJacobianTimeVariationToPoint(dJ_hd_r, J_hd_r_wrist, rHandTcpOffset_W, dq);
+    shiftSpatialJacobianToPoint(J_hd_r, rHandTcpOffset_W);
     fe_l_pos = data_biped.oMi[l_ankle_joint].translation();
     fe_l_rot = data_biped.oMi[l_ankle_joint].rotation();
     hip_l_pos = data_biped.oMi[l_hip_joint].translation();
@@ -172,7 +253,7 @@ void Pin_KinDyn_V4::computeJ_dJ()
     base_rot = data_biped.oMi[base_joint].rotation();
     hd_l_pos = data_biped.oMi[l_hand_joint].translation();
     hd_l_rot = data_biped.oMi[l_hand_joint].rotation();
-    hd_r_pos = data_biped.oMi[r_hand_joint].translation();
+    hd_r_pos = rightWeldTcpPosition(data_biped.oMi[r_hand_joint]);
     hd_r_rot = data_biped.oMi[r_hand_joint].rotation();
     // For v4: hip_link uses base_joint since legs attach directly to base
     hip_link_pos = data_biped.oMi[base_joint].translation();
@@ -212,7 +293,7 @@ void Pin_KinDyn_V4::computeJ_dJ()
     hip_r_pos_body = data_biped_fixed.oMi[r_hip_joint_fixed].translation();
     hd_l_pos_body = data_biped_fixed.oMi[l_hand_joint_fixed].translation();
     hd_l_rot_body = data_biped_fixed.oMi[l_hand_joint_fixed].rotation();
-    hd_r_pos_body = data_biped_fixed.oMi[r_hand_joint_fixed].translation();
+    hd_r_pos_body = rightWeldTcpPosition(data_biped_fixed.oMi[r_hand_joint_fixed]);
     hd_r_rot_body = data_biped_fixed.oMi[r_hand_joint_fixed].rotation();
     fe_l_vel_body = (J_l_body * dq_fixed).block(0, 0, 3, 1);
     fe_r_vel_body = (J_r_body * dq_fixed).block(0, 0, 3, 1);
@@ -472,6 +553,147 @@ Pin_KinDyn_V4::computeInK_Hand(const Eigen::Matrix3d &Rdes_L, const Eigen::Vecto
 
     res.jointPosRes = qIk;
     return res;
+}
+
+Pin_KinDyn_V4::IkRes
+Pin_KinDyn_V4::computeRightHandPosIK(const Eigen::Vector3d &Pdes_R, const Eigen::VectorXd &qSeedFixed)
+{
+    Eigen::VectorXd qIk = Eigen::VectorXd::Zero(model_biped_fixed.nq);
+    if (qSeedFixed.size() == model_biped_fixed.nq)
+    {
+        qIk = qSeedFixed;
+    }
+    else
+    {
+        qIk.block<5, 1>(17, 0) << -0.3, -1.4, 0.0, 1.4, 0.0;
+    }
+
+    for (int i = 0; i < model_biped_fixed.nq; ++i)
+    {
+        const double lower = model_biped_fixed.lowerPositionLimit(i);
+        const double upper = model_biped_fixed.upperPositionLimit(i);
+        if (std::isfinite(lower) && std::isfinite(upper) && lower < upper)
+        {
+            qIk(i) = std::clamp(qIk(i), lower, upper);
+        }
+    }
+
+    constexpr double eps = 1e-4;
+    constexpr int IT_MAX = 100;
+    constexpr double DT = 0.75;
+    constexpr double damp = 1e-4;
+    Eigen::MatrixXd J(6, model_biped_fixed.nv);
+    Eigen::MatrixXd Jpos(3, 5);
+    Eigen::VectorXd v = Eigen::VectorXd::Zero(model_biped_fixed.nv);
+    Eigen::Vector3d err = Eigen::Vector3d::Zero();
+    bool success = false;
+    int itr_count = 0;
+
+    for (itr_count = 0; itr_count <= IT_MAX; ++itr_count)
+    {
+        pinocchio::forwardKinematics(model_biped_fixed, data_biped_fixed, qIk);
+        pinocchio::updateGlobalPlacements(model_biped_fixed, data_biped_fixed);
+        const Eigen::Vector3d cur = rightWeldTcpPosition(data_biped_fixed.oMi[r_hand_joint_fixed]);
+        err = Pdes_R - cur;
+        if (err.norm() < eps)
+        {
+            success = true;
+            break;
+        }
+        if (itr_count >= IT_MAX)
+        {
+            break;
+        }
+
+        pinocchio::computeJointJacobians(model_biped_fixed, data_biped_fixed, qIk);
+        pinocchio::getJointJacobian(model_biped_fixed, data_biped_fixed,
+                                    r_hand_joint_fixed, pinocchio::LOCAL_WORLD_ALIGNED, J);
+        const Eigen::Vector3d tcpOffset_W =
+            data_biped_fixed.oMi[r_hand_joint_fixed].rotation() * rightWeldTcpOffsetLocal();
+        shiftSpatialJacobianToPoint(J, tcpOffset_W);
+        Jpos = J.block(0, 17, 3, 5);
+        Eigen::Matrix3d JJt = Jpos * Jpos.transpose();
+        JJt.diagonal().array() += damp;
+        Eigen::Matrix<double, 5, 1> dqArm = Jpos.transpose() * JJt.ldlt().solve(err);
+        const double stepNorm = dqArm.norm();
+        if (stepNorm > 0.20)
+        {
+            dqArm *= 0.20 / stepNorm;
+        }
+        v.setZero();
+        v.segment<5>(17) = dqArm;
+        qIk = pinocchio::integrate(model_biped_fixed, qIk, v * DT);
+        for (int i = 17; i < 22; ++i)
+        {
+            const double lower = model_biped_fixed.lowerPositionLimit(i);
+            const double upper = model_biped_fixed.upperPositionLimit(i);
+            if (std::isfinite(lower) && std::isfinite(upper) && lower < upper)
+            {
+                qIk(i) = std::clamp(qIk(i), lower, upper);
+            }
+        }
+    }
+
+    pinocchio::forwardKinematics(model_biped_fixed, data_biped_fixed, qIk);
+    pinocchio::updateGlobalPlacements(model_biped_fixed, data_biped_fixed);
+    err = Pdes_R - rightWeldTcpPosition(data_biped_fixed.oMi[r_hand_joint_fixed]);
+
+    IkRes res;
+    res.status = success ? 0 : -1;
+    res.itr = itr_count;
+    res.err = err;
+    res.jointPosRes = qIk;
+    return res;
+}
+
+Eigen::Vector3d Pin_KinDyn_V4::computeRightHandPosFixed(const Eigen::VectorXd &qFixed)
+{
+    Eigen::VectorXd qEval = Eigen::VectorXd::Zero(model_biped_fixed.nq);
+    if (qFixed.size() == model_biped_fixed.nq)
+    {
+        qEval = qFixed;
+    }
+    pinocchio::forwardKinematics(model_biped_fixed, data_biped_fixed, qEval);
+    pinocchio::updateGlobalPlacements(model_biped_fixed, data_biped_fixed);
+    return rightWeldTcpPosition(data_biped_fixed.oMi[r_hand_joint_fixed]);
+}
+
+std::array<Eigen::Vector3d, 5> Pin_KinDyn_V4::computeRightArmKeypointsFixed(const Eigen::VectorXd &qFixed)
+{
+    Eigen::VectorXd qEval = Eigen::VectorXd::Zero(model_biped_fixed.nq);
+    if (qFixed.size() == model_biped_fixed.nq)
+    {
+        qEval = qFixed;
+    }
+    pinocchio::forwardKinematics(model_biped_fixed, data_biped_fixed, qEval);
+    pinocchio::updateGlobalPlacements(model_biped_fixed, data_biped_fixed);
+
+    const std::array<std::string, 4> jointNames = {
+        "right_shoulder_pitch_joint",
+        "right_shoulder_yaw_joint",
+        "right_elbow_joint",
+        "right_wrist_roll_joint"};
+    std::array<Eigen::Vector3d, 5> keypoints{};
+    for (int i = 0; i < static_cast<int>(jointNames.size()); ++i)
+    {
+        const pinocchio::JointIndex jointId = model_biped_fixed.getJointId(jointNames[i]);
+        keypoints[i] = (jointId < model_biped_fixed.njoints)
+                           ? data_biped_fixed.oMi[jointId].translation()
+                           : Eigen::Vector3d::Zero();
+    }
+    keypoints[4] = rightWeldTcpPosition(data_biped_fixed.oMi[r_hand_joint_fixed]);
+    return keypoints;
+}
+
+Eigen::Vector3d Pin_KinDyn_V4::computeFixedCoM(const Eigen::VectorXd &qFixed)
+{
+    Eigen::VectorXd qEval = Eigen::VectorXd::Zero(model_biped_fixed.nq);
+    if (qFixed.size() == model_biped_fixed.nq)
+    {
+        qEval = qFixed;
+    }
+    pinocchio::centerOfMass(model_biped_fixed, data_biped_fixed, qEval);
+    return data_biped_fixed.com[0];
 }
 
 void Pin_KinDyn_V4::workspaceConstraint(Eigen::VectorXd &qFT, Eigen::VectorXd &tauJointFT)

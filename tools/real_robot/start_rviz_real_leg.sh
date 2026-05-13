@@ -7,10 +7,10 @@ REPO_ROOT="$(cd -- "${SCRIPT_DIR}/../.." && pwd)"
 URDF_DEFAULT="${REPO_ROOT}/models/speedbot_v4/speedbot_v4_leg.urdf"
 RVIZ_CFG_DEFAULT="${SCRIPT_DIR}/speedbot_v4_leg.rviz"
 
-JOINT_TOPIC="${OPENLOONG_ROS_TOPIC_JOINT_STATES:-/joint_states}"
-IMU_TOPIC="${OPENLOONG_ROS_TOPIC_IMU:-/imu/data}"
-URDF_PATH="${OPENLOONG_ROBOT_URDF:-${URDF_DEFAULT}}"
-RVIZ_CFG="${OPENLOONG_RVIZ_CONFIG:-${RVIZ_CFG_DEFAULT}}"
+JOINT_TOPIC="${ROS_TOPIC_JOINT_STATES:-/joint_states}"
+IMU_TOPIC="${ROS_TOPIC_IMU:-/imu/data}"
+URDF_PATH="${ROBOT_URDF:-${URDF_DEFAULT}}"
+RVIZ_CFG="${RVIZ_CONFIG:-${RVIZ_CFG_DEFAULT}}"
 
 cleanup_old_robot_state_publishers() {
   local old_pids=()

@@ -14,6 +14,8 @@
 #include "wbc_priority_v4.h"
 #include "iostream"
 #include <algorithm>
+#include <cmath>
+#include <limits>
 
 // QP_nvIn=18, QP_ncIn=22 (same as AzureLoong: 6 delta_b + 12 contact forces)
 WBC_priority_V4::WBC_priority_V4(int model_nv_In, int QP_nvIn, int QP_ncIn, double miu_In, double dt) : QP_prob(QP_nvIn,
@@ -50,12 +52,15 @@ WBC_priority_V4::WBC_priority_V4(int model_nv_In, int QP_nvIn, int QP_ncIn, doub
     eigen_ddq_Opt = Eigen::VectorXd::Zero(model_nv);
     eigen_fr_Opt = Eigen::VectorXd::Zero(12);
     eigen_tau_Opt = Eigen::VectorXd::Zero(model_nv - 6);
+    tauJointLow = Eigen::VectorXd::Constant(model_nv - 6, -1.0e10);
+    tauJointUpp = Eigen::VectorXd::Constant(model_nv - 6, 1.0e10);
 
     delta_q_final_kin = Eigen::VectorXd::Zero(model_nv);
     dq_final_kin = Eigen::VectorXd::Zero(model_nv);
     ddq_final_kin = Eigen::VectorXd::Zero(model_nv);
 
     base_rpy_cur = Eigen::VectorXd::Zero(3);
+    weld_left_arm_balance_vel = Eigen::VectorXd::Zero(5);
 
     //  WBC task defined and order build
     ///------------ walk --------------
@@ -94,11 +99,58 @@ WBC_priority_V4::WBC_priority_V4(int model_nv_In, int QP_nvIn, int QP_ncIn, doub
     // No HeadRP in priority order
 
     kin_tasks_stand.buildPriority(taskOrder_stand);
+
+    ///-------- weld ------------
+    kin_tasks_weld.addTask("static_Contact");
+    kin_tasks_weld.addTask("CoMXY_HipRPY");
+    kin_tasks_weld.addTask("Pz");
+    kin_tasks_weld.addTask("AngularMomentumDamping");
+    kin_tasks_weld.addTask("RightHandWeld");
+    kin_tasks_weld.addTask("RightArmRecover");
+    kin_tasks_weld.addTask("LeftArmBalance");
+
+    std::vector<std::string> taskOrder_weld;
+    taskOrder_weld.emplace_back("static_Contact");
+    taskOrder_weld.emplace_back("CoMXY_HipRPY");
+    taskOrder_weld.emplace_back("Pz");
+    taskOrder_weld.emplace_back("AngularMomentumDamping");
+    taskOrder_weld.emplace_back("RightHandWeld");
+    taskOrder_weld.emplace_back("RightArmRecover");
+    taskOrder_weld.emplace_back("LeftArmBalance");
+    kin_tasks_weld.buildPriority(taskOrder_weld);
 }
 
 void WBC_priority_V4::setContactMiu(double miuIn)
 {
     miu = std::clamp(miuIn, 0.01, 2.0);
+}
+
+void WBC_priority_V4::setJointTorqueLimits(const Eigen::VectorXd &tauLowIn, const Eigen::VectorXd &tauUppIn)
+{
+    if (tauLowIn.size() != model_nv - 6 || tauUppIn.size() != model_nv - 6)
+    {
+        jointTorqueLimitEnabled = false;
+        tauJointLow = Eigen::VectorXd::Constant(model_nv - 6, -1.0e10);
+        tauJointUpp = Eigen::VectorXd::Constant(model_nv - 6, 1.0e10);
+        std::cerr << "[WBC_V4] invalid torque limit size, disabling torque constraints." << std::endl;
+        return;
+    }
+
+    tauJointLow = tauLowIn;
+    tauJointUpp = tauUppIn;
+    for (int i = 0; i < model_nv - 6; ++i)
+    {
+        if (!std::isfinite(tauJointLow(i)) || !std::isfinite(tauJointUpp(i)) ||
+            tauJointLow(i) >= tauJointUpp(i))
+        {
+            jointTorqueLimitEnabled = false;
+            tauJointLow = Eigen::VectorXd::Constant(model_nv - 6, -1.0e10);
+            tauJointUpp = Eigen::VectorXd::Constant(model_nv - 6, 1.0e10);
+            std::cerr << "[WBC_V4] invalid torque limit value, disabling torque constraints." << std::endl;
+            return;
+        }
+    }
+    jointTorqueLimitEnabled = true;
 }
 
 void WBC_priority_V4::dataBusRead(const DataBus &robotState)
@@ -114,6 +166,15 @@ void WBC_priority_V4::dataBusRead(const DataBus &robotState)
     stance_fe_pos_cur_W = robotState.stance_fe_pos_cur_W;
     stance_fe_rot_cur_W = robotState.stance_fe_rot_cur_W;
     stanceDesPos_W = robotState.stanceDesPos_W;
+    weld_tcp_pos_des_W = robotState.weld_tcp_pos_des_W;
+    weld_tcp_rot_des_W = robotState.weld_tcp_rot_des_W;
+    weld_tcp_linear_vel_des_W = robotState.weld_tcp_linear_vel_des_W;
+    weld_tcp_angular_vel_des_W = robotState.weld_tcp_angular_vel_des_W;
+    weld_tcp_linear_acc_des_W = robotState.weld_tcp_linear_acc_des_W;
+    weld_tcp_angular_acc_des_W = robotState.weld_tcp_angular_acc_des_W;
+    weld_prepare_phase = robotState.weld_prepare_phase;
+    weld_recover_phase = robotState.weld_recover_phase;
+    weld_active = robotState.weld_active;
     hd_l_pos_cur_W = robotState.hd_l_pos_W;
     hd_r_pos_cur_W = robotState.hd_r_pos_W;
     hd_l_rot_cur_W = robotState.hd_l_rot_W;
@@ -143,8 +204,8 @@ void WBC_priority_V4::dataBusRead(const DataBus &robotState)
     dJfe.block(6, 0, 6, model_nv) = robotState.dJ_r;
     J_hd_l = robotState.J_hd_l;
     J_hd_r = robotState.J_hd_r;
-    dJ_hd_l = robotState.J_hd_l;
-    dJ_hd_r = robotState.J_hd_r;
+    dJ_hd_l = robotState.dJ_hd_l;
+    dJ_hd_r = robotState.dJ_hd_r;
     Fr_ff = robotState.Fr_ff;
     dyn_M = robotState.dyn_M;
     dyn_M_inv = robotState.dyn_M_inv;
@@ -204,6 +265,47 @@ void WBC_priority_V4::dataBusWrite(DataBus &robotState)
     robotState.qp_status = qpStatus;
     robotState.qp_nWSR = nWSR;
     robotState.qp_cpuTime = cpu_time;
+
+    robotState.weld_tcp_pos_cur_W = hd_r_pos_cur_W;
+    robotState.weld_tcp_pos_err_W = weld_tcp_pos_des_W - hd_r_pos_cur_W;
+    if (q.size() >= 24)
+    {
+        robotState.weld_left_arm_q = q.block<5, 1>(19, 0);
+    }
+    else
+    {
+        robotState.weld_left_arm_q = Eigen::VectorXd::Zero(5);
+    }
+    robotState.weld_left_arm_balance_vel = (weld_left_arm_balance_vel.size() == 5)
+                                               ? weld_left_arm_balance_vel
+                                               : Eigen::VectorXd::Zero(5);
+    robotState.weld_left_arm_vel_norm = robotState.weld_left_arm_balance_vel.norm();
+    Eigen::Matrix3d weldDesRot = weld_tcp_rot_des_W;
+    robotState.weld_tcp_rot_err_W = diffRot(hd_r_rot_cur_W, weldDesRot);
+    if (dyn_Ag.rows() >= 6 && dyn_Ag.cols() == model_nv && dq.size() == model_nv)
+    {
+        robotState.weld_ang_momentum = dyn_Ag.block(3, 0, 3, model_nv) * dq;
+        robotState.weld_h_ang_norm = robotState.weld_ang_momentum.norm();
+    }
+    else
+    {
+        robotState.weld_ang_momentum.setZero();
+        robotState.weld_h_ang_norm = 0.0;
+    }
+    if (jointTorqueLimitEnabled && tauJointRes.size() == model_nv - 6)
+    {
+        double tauMargin = std::numeric_limits<double>::infinity();
+        for (int i = 0; i < model_nv - 6; ++i)
+        {
+            tauMargin = std::min(tauMargin, std::min(tauJointUpp(i) - tauJointRes(i),
+                                                     tauJointRes(i) - tauJointLow(i)));
+        }
+        robotState.weld_tau_margin = std::isfinite(tauMargin) ? tauMargin : 0.0;
+    }
+    else
+    {
+        robotState.weld_tau_margin = 0.0;
+    }
 }
 
 void WBC_priority_V4::computeTau()
@@ -216,7 +318,9 @@ void WBC_priority_V4::computeTau()
     eqRes = -Sf * dyn_M * ddq_final_kin - Sf * dyn_Non + Sf * Jfe.transpose() * Fr_ff;
 
     Eigen::Matrix3d Rfe;
-    if (motionStateCur == DataBus::Stand)
+    if (motionStateCur == DataBus::Stand || motionStateCur == DataBus::WeldPrepare ||
+        motionStateCur == DataBus::Weld || motionStateCur == DataBus::WeldHold ||
+        motionStateCur == DataBus::WeldRecover)
     {
         Rfe = fe_l_rot_cur_W;
     }
@@ -248,7 +352,7 @@ void WBC_priority_V4::computeTau()
     Eigen::VectorXd f_low = Eigen::VectorXd::Zero(16);
     Eigen::VectorXd f_upp = Eigen::VectorXd::Zero(16);
     Eigen::Vector3d tau_upp_fe, tau_low_fe;
-    if (motionStateCur == DataBus::Stand)
+    if (motionStateCur == DataBus::Stand || motionStateCur == DataBus::WeldPrepare || motionStateCur == DataBus::Weld)
     {
         tau_upp_fe = tau_upp_stand_L;
         tau_low_fe = tau_low_stand_L;
@@ -282,7 +386,7 @@ void WBC_priority_V4::computeTau()
         }
     }
 
-    Eigen::MatrixXd eigen_qp_A2 = Eigen::MatrixXd::Zero(16, 18);
+    Eigen::MatrixXd eigen_qp_A2 = Eigen::MatrixXd::Zero(16, QP_nv);
     eigen_qp_A2.block<16, 12>(0, 6) = W;
     Eigen::VectorXd neqRes_low = Eigen::VectorXd::Zero(16);
     Eigen::VectorXd neqRes_upp = Eigen::VectorXd::Zero(16);
@@ -291,21 +395,38 @@ void WBC_priority_V4::computeTau()
     neqRes_upp = f_upp - W * Fr_ff;
 
     Eigen::MatrixXd eigen_qp_A_final = Eigen::MatrixXd::Zero(QP_nc, QP_nv);
-    eigen_qp_A_final.block<6, 18>(0, 0) = eigen_qp_A1;
-    eigen_qp_A_final.block<16, 18>(6, 0) = eigen_qp_A2;
+    Eigen::VectorXd eigen_qp_lbA = Eigen::VectorXd::Constant(QP_nc, -1.0e10);
+    Eigen::VectorXd eigen_qp_ubA = Eigen::VectorXd::Constant(QP_nc, 1.0e10);
 
-    Eigen::VectorXd eigen_qp_lbA = Eigen::VectorXd::Zero(22);
-    Eigen::VectorXd eigen_qp_ubA = Eigen::VectorXd::Zero(22);
-
+    eigen_qp_A_final.block(0, 0, 6, QP_nv) = eigen_qp_A1;
+    eigen_qp_A_final.block(6, 0, 16, QP_nv) = eigen_qp_A2;
     eigen_qp_lbA.block<6, 1>(0, 0) = eqRes;
     eigen_qp_lbA.block<16, 1>(6, 0) = neqRes_low;
     eigen_qp_ubA.block<6, 1>(0, 0) = eqRes;
     eigen_qp_ubA.block<16, 1>(6, 0) = neqRes_upp;
 
+    const int torqueStartRow = 22;
+    const int torqueRows = std::max(0, std::min(model_nv - 6, QP_nc - torqueStartRow));
+    const bool enforceJointTorqueLimits = jointTorqueLimitEnabled && motionStateCur == DataBus::Weld;
+    if (torqueRows > 0 && enforceJointTorqueLimits)
+    {
+        Eigen::MatrixXd tauA = Eigen::MatrixXd::Zero(model_nv - 6, QP_nv);
+        tauA.block(0, 0, model_nv - 6, 6) = dyn_M.block(6, 0, model_nv - 6, model_nv) * St_qpV1;
+        tauA.block(0, 6, model_nv - 6, 12) = -Jfe.transpose().block(6, 0, model_nv - 6, 12);
+
+        const Eigen::VectorXd tauNom =
+            (dyn_M * ddq_final_kin + dyn_Non - Jfe.transpose() * Fr_ff).block(6, 0, model_nv - 6, 1);
+        eigen_qp_A_final.block(torqueStartRow, 0, torqueRows, QP_nv) = tauA.topRows(torqueRows);
+        eigen_qp_lbA.segment(torqueStartRow, torqueRows) =
+            (tauJointLow - tauNom).head(torqueRows);
+        eigen_qp_ubA.segment(torqueStartRow, torqueRows) =
+            (tauJointUpp - tauNom).head(torqueRows);
+    }
+
     Eigen::MatrixXd eigen_qp_H = Eigen::MatrixXd::Zero(QP_nv, QP_nv);
     Q2 = Eigen::MatrixXd::Identity(6, 6);
     Q1 = Eigen::MatrixXd::Identity(12, 12);
-    if (motionStateCur == DataBus::Stand){
+    if (motionStateCur == DataBus::Stand || motionStateCur == DataBus::WeldPrepare || motionStateCur == DataBus::Weld){
         eigen_qp_H.block<6, 6>(0, 0) = Q2 * 2.0 * 1e7;
         eigen_qp_H.block<12, 12>(6, 6) = Q1 * 2.0 * 1e1;
         eigen_qp_H(9,9) *= 100;
@@ -329,6 +450,7 @@ void WBC_priority_V4::computeTau()
         xOpt_iniGuess[i] = 0;
         qp_g[i] = 0;
     }
+    eigen_xOpt.setZero();
     nWSR = 200;
     cpu_time = timeStep;
     res = QP_prob.init(qp_H, qp_g, qp_A, NULL, NULL, qp_lbA, qp_ubA, nWSR, &cpu_time, xOpt_iniGuess);
@@ -612,6 +734,11 @@ void WBC_priority_V4::computeDdq(Pin_KinDyn_V4 &pinKinDynIn)
         Eigen::VectorXd target_arm_q;
         target_arm_q.resize(10);
         target_arm_q << 0.3, 1.4, 0, -1.4, 0, -0.3, -1.4, 0, 1.4, 0;
+        if (qIniDes.size() >= 29)
+        {
+            target_arm_q.block<5, 1>(0, 0) = qIniDes.block<5, 1>(19, 0);
+            target_arm_q.block<5, 1>(5, 0) = qIniDes.block<5, 1>(24, 0);
+        }
 
         id = kin_tasks_stand.getId("HandTrackJoints");
         kin_tasks_stand.taskLib[id].errX = Eigen::VectorXd::Zero(10);
@@ -650,6 +777,215 @@ void WBC_priority_V4::computeDdq(Pin_KinDyn_V4 &pinKinDynIn)
 
     }
 
+    /// -------- weld -------------
+    {
+        int id = kin_tasks_weld.getId("static_Contact");
+        kin_tasks_weld.taskLib[id].errX = Eigen::VectorXd::Zero(12);
+        kin_tasks_weld.taskLib[id].derrX = Eigen::VectorXd::Zero(12);
+        kin_tasks_weld.taskLib[id].ddxDes = Eigen::VectorXd::Zero(12);
+        kin_tasks_weld.taskLib[id].dxDes = Eigen::VectorXd::Zero(12);
+        kin_tasks_weld.taskLib[id].kp = Eigen::MatrixXd::Identity(12, 12) * 0;
+        kin_tasks_weld.taskLib[id].kd = Eigen::MatrixXd::Identity(12, 12) * 0;
+        Eigen::MatrixXd taskCtMap = Eigen::MatrixXd::Zero(3, 3);
+        taskCtMap(1, 1) = 1;
+        taskCtMap(2, 2) = 1;
+        taskCtMap = fe_l_rot_cur_W * taskCtMap * fe_l_rot_cur_W.transpose();
+        kin_tasks_weld.taskLib[id].J = Jfe;
+        kin_tasks_weld.taskLib[id].J.block(3, 0, 3, model_nv) = taskCtMap * kin_tasks_weld.taskLib[id].J.block(3, 0, 3, model_nv);
+        kin_tasks_weld.taskLib[id].J.block(9, 0, 3, model_nv) = taskCtMap * kin_tasks_weld.taskLib[id].J.block(9, 0, 3, model_nv);
+        kin_tasks_weld.taskLib[id].dJ = Eigen::MatrixXd::Zero(12, model_nv);
+        kin_tasks_weld.taskLib[id].W.diagonal() = Eigen::VectorXd::Ones(model_nv);
+
+        id = kin_tasks_weld.getId("CoMXY_HipRPY");
+        Eigen::MatrixXd taskMapRPY = Eigen::MatrixXd::Zero(3, 6);
+        taskMapRPY(0, 3) = 1;
+        taskMapRPY(1, 4) = 1;
+        taskMapRPY(2, 5) = 1;
+        kin_tasks_weld.taskLib[id].errX = Eigen::VectorXd::Zero(5);
+        kin_tasks_weld.taskLib[id].errX.block(0, 0, 2, 1) = pCoMDes.block(0, 0, 2, 1) - pCoMCur.block(0, 0, 2, 1);
+        Eigen::Matrix3d desRot = eul2Rot(base_rpy_des(0), base_rpy_des(1), base_rpy_des(2));
+        kin_tasks_weld.taskLib[id].errX.block<3, 1>(2, 0) = diffRot(hip_link_rot, desRot);
+        kin_tasks_weld.taskLib[id].derrX = Eigen::VectorXd::Zero(5);
+        kin_tasks_weld.taskLib[id].ddxDes = Eigen::VectorXd::Zero(5);
+        kin_tasks_weld.taskLib[id].dxDes = Eigen::VectorXd::Zero(5);
+        kin_tasks_weld.taskLib[id].kp = Eigen::MatrixXd::Identity(5, 5) * 250;
+        kin_tasks_weld.taskLib[id].kp.block(2, 2, 3, 3) = Eigen::MatrixXd::Identity(3, 3) * 1000;
+        kin_tasks_weld.taskLib[id].kd = Eigen::MatrixXd::Identity(5, 5) * 10;
+        kin_tasks_weld.taskLib[id].kd.block(2, 2, 3, 3) = Eigen::MatrixXd::Identity(3, 3) * 10;
+        kin_tasks_weld.taskLib[id].J = Eigen::MatrixXd::Zero(5, model_nv);
+        kin_tasks_weld.taskLib[id].J.block(0, 0, 2, model_nv) = Jcom.block(0, 0, 2, model_nv);
+        kin_tasks_weld.taskLib[id].J.block(2, 0, 3, model_nv) = taskMapRPY * J_hip_link;
+        kin_tasks_weld.taskLib[id].J.block(0, 18, 2, 5).setZero();
+        kin_tasks_weld.taskLib[id].J.block(0, 23, 2, 5).setZero();
+        kin_tasks_weld.taskLib[id].J.block(2, 18, 3, 5).setZero();
+        kin_tasks_weld.taskLib[id].J.block(2, 23, 3, 5).setZero();
+        kin_tasks_weld.taskLib[id].dJ = Eigen::MatrixXd::Zero(5, model_nv);
+        kin_tasks_weld.taskLib[id].W.diagonal() = Eigen::VectorXd::Ones(model_nv);
+
+        id = kin_tasks_weld.getId("Pz");
+        kin_tasks_weld.taskLib[id].errX = Eigen::VectorXd::Zero(1);
+        kin_tasks_weld.taskLib[id].errX(0) = base_pos_des(2) - q(2);
+        kin_tasks_weld.taskLib[id].derrX = Eigen::VectorXd::Zero(1);
+        kin_tasks_weld.taskLib[id].ddxDes = Eigen::VectorXd::Zero(1);
+        kin_tasks_weld.taskLib[id].dxDes = Eigen::VectorXd::Zero(1);
+        kin_tasks_weld.taskLib[id].kp = Eigen::MatrixXd::Identity(1, 1) * 2000;
+        kin_tasks_weld.taskLib[id].kd = Eigen::MatrixXd::Identity(1, 1) * 10;
+        Eigen::MatrixXd taskMap = Eigen::MatrixXd::Zero(1, 6);
+        taskMap(0, 2) = 1;
+        kin_tasks_weld.taskLib[id].J = taskMap * J_base;
+        kin_tasks_weld.taskLib[id].dJ = taskMap * dJ_base;
+        kin_tasks_weld.taskLib[id].W.diagonal() = Eigen::VectorXd::Ones(model_nv);
+
+        Eigen::Vector3d hAng = Eigen::Vector3d::Zero();
+        Eigen::MatrixXd AgAng = Eigen::MatrixXd::Zero(3, model_nv);
+        Eigen::MatrixXd dAgAng = Eigen::MatrixXd::Zero(3, model_nv);
+        if (dyn_Ag.rows() >= 6 && dyn_Ag.cols() == model_nv)
+        {
+            AgAng = dyn_Ag.block(3, 0, 3, model_nv);
+            hAng = AgAng * dq;
+        }
+        if (dyn_dAg.rows() >= 6 && dyn_dAg.cols() == model_nv)
+        {
+            dAgAng = dyn_dAg.block(3, 0, 3, model_nv);
+        }
+
+        id = kin_tasks_weld.getId("AngularMomentumDamping");
+        kin_tasks_weld.taskLib[id].errX = Eigen::VectorXd::Zero(3);
+        kin_tasks_weld.taskLib[id].derrX = -hAng;
+        kin_tasks_weld.taskLib[id].ddxDes = Eigen::VectorXd::Zero(3);
+        kin_tasks_weld.taskLib[id].dxDes = hAng;
+        kin_tasks_weld.taskLib[id].kp = Eigen::MatrixXd::Zero(3, 3);
+        kin_tasks_weld.taskLib[id].kd = Eigen::MatrixXd::Identity(3, 3) * cfg_weld_ang_momentum_damping;
+        if (cfg_weld_ang_momentum_damping > 1.0e-9 &&
+            (motionStateCur == DataBus::Weld || motionStateCur == DataBus::WeldHold ||
+             motionStateCur == DataBus::WeldRecover))
+        {
+            kin_tasks_weld.taskLib[id].J = AgAng;
+            kin_tasks_weld.taskLib[id].dJ = dAgAng;
+        }
+        else
+        {
+            kin_tasks_weld.taskLib[id].derrX.setZero();
+            kin_tasks_weld.taskLib[id].J = Eigen::MatrixXd::Zero(3, model_nv);
+            kin_tasks_weld.taskLib[id].dJ = Eigen::MatrixXd::Zero(3, model_nv);
+        }
+        kin_tasks_weld.taskLib[id].W.diagonal() = Eigen::VectorXd::Ones(model_nv);
+
+        id = kin_tasks_weld.getId("RightHandWeld");
+        kin_tasks_weld.taskLib[id].errX = Eigen::VectorXd::Zero(3);
+        Eigen::Vector3d weldPosErr = weld_tcp_pos_des_W - hd_r_pos_cur_W;
+        const double weldPosErrNorm = weldPosErr.norm();
+        const bool isWeldPrepare = (motionStateCur == DataBus::WeldPrepare);
+        const double maxWeldPosErrForTask = isWeldPrepare ? 0.025 : 0.025;
+        if (weldPosErrNorm > maxWeldPosErrForTask)
+        {
+            weldPosErr *= maxWeldPosErrForTask / weldPosErrNorm;
+        }
+        const double preparePhase = std::clamp(weld_prepare_phase, 0.0, 1.0);
+        const double handTaskScale = isWeldPrepare
+                                         ? preparePhase * preparePhase * (3.0 - 2.0 * preparePhase)
+                                         : 1.0;
+        weldPosErr *= handTaskScale;
+        kin_tasks_weld.taskLib[id].errX.block<3, 1>(0, 0) = weldPosErr;
+        Eigen::MatrixXd rightHandJ = Eigen::MatrixXd::Zero(3, model_nv);
+        Eigen::MatrixXd rightHanddJ = Eigen::MatrixXd::Zero(3, model_nv);
+        rightHandJ.block(0, 23, 3, 5) = J_hd_r.block(0, 23, 3, 5);
+        rightHanddJ.block(0, 23, 3, 5) = dJ_hd_r.block(0, 23, 3, 5);
+        Eigen::Vector3d handVel = rightHandJ * dq;
+        kin_tasks_weld.taskLib[id].derrX = Eigen::VectorXd::Zero(3);
+        kin_tasks_weld.taskLib[id].derrX.block<3, 1>(0, 0) =
+            handTaskScale * weld_tcp_linear_vel_des_W - handVel.block<3, 1>(0, 0);
+        kin_tasks_weld.taskLib[id].ddxDes = Eigen::VectorXd::Zero(3);
+        kin_tasks_weld.taskLib[id].ddxDes.block<3, 1>(0, 0) = handTaskScale * weld_tcp_linear_acc_des_W;
+        kin_tasks_weld.taskLib[id].dxDes = Eigen::VectorXd::Zero(3);
+        kin_tasks_weld.taskLib[id].dxDes.block<3, 1>(0, 0) = handTaskScale * weld_tcp_linear_vel_des_W;
+        kin_tasks_weld.taskLib[id].kp = Eigen::MatrixXd::Identity(3, 3) * (cfg_weld_hand_kp * handTaskScale);
+        kin_tasks_weld.taskLib[id].kd = Eigen::MatrixXd::Identity(3, 3) * (cfg_weld_hand_kd * handTaskScale);
+        kin_tasks_weld.taskLib[id].J = rightHandJ;
+        kin_tasks_weld.taskLib[id].dJ = rightHanddJ;
+        kin_tasks_weld.taskLib[id].W.diagonal() = Eigen::VectorXd::Ones(model_nv);
+
+        id = kin_tasks_weld.getId("RightArmRecover");
+        Eigen::VectorXd target_right_arm = Eigen::VectorXd::Zero(5);
+        target_right_arm << -0.3, -1.4, 0.0, 1.4, 0.0;
+        if (qIniDes.size() >= 29)
+        {
+            target_right_arm = qIniDes.block<5, 1>(24, 0);
+        }
+        const double rightArmRecoverScale =
+            (motionStateCur == DataBus::WeldRecover) ? std::clamp(weld_recover_phase, 0.0, 1.0) : 0.0;
+        kin_tasks_weld.taskLib[id].errX = target_right_arm - q.block<5, 1>(24, 0);
+        kin_tasks_weld.taskLib[id].derrX = -dq.block<5, 1>(23, 0);
+        kin_tasks_weld.taskLib[id].ddxDes = Eigen::VectorXd::Zero(5);
+        kin_tasks_weld.taskLib[id].dxDes = Eigen::VectorXd::Zero(5);
+        kin_tasks_weld.taskLib[id].kp = Eigen::MatrixXd::Identity(5, 5) *
+                                        (cfg_weld_right_arm_recover_kp * rightArmRecoverScale);
+        kin_tasks_weld.taskLib[id].kd = Eigen::MatrixXd::Identity(5, 5) *
+                                        (cfg_weld_right_arm_recover_kd * rightArmRecoverScale);
+        kin_tasks_weld.taskLib[id].J = Eigen::MatrixXd::Zero(5, model_nv);
+        if (rightArmRecoverScale > 1.0e-6)
+        {
+            kin_tasks_weld.taskLib[id].J.block(0, 23, 5, 5) = Eigen::MatrixXd::Identity(5, 5);
+        }
+        else
+        {
+            kin_tasks_weld.taskLib[id].errX.setZero();
+            kin_tasks_weld.taskLib[id].derrX.setZero();
+        }
+        kin_tasks_weld.taskLib[id].dJ = Eigen::MatrixXd::Zero(5, model_nv);
+        kin_tasks_weld.taskLib[id].W.diagonal() = Eigen::VectorXd::Ones(model_nv);
+
+        id = kin_tasks_weld.getId("LeftArmBalance");
+        Eigen::VectorXd target_left_arm = Eigen::VectorXd::Zero(5);
+        target_left_arm << 0.3, 1.4, 0.0, -1.4, 0.0;
+        if (qIniDes.size() >= 24)
+        {
+            target_left_arm = qIniDes.block<5, 1>(19, 0);
+        }
+        const bool isLeftArmBalanceState = (motionStateCur == DataBus::WeldPrepare ||
+                                            motionStateCur == DataBus::Weld ||
+                                            motionStateCur == DataBus::WeldHold ||
+                                            motionStateCur == DataBus::WeldRecover);
+        const double leftArmTaskScale = (motionStateCur == DataBus::WeldPrepare)
+                                            ? preparePhase * preparePhase * (3.0 - 2.0 * preparePhase)
+                                            : (isLeftArmBalanceState ? 1.0 : 0.0);
+        Eigen::VectorXd leftArmVelCmd = Eigen::VectorXd::Zero(5);
+        if (dyn_Ag.rows() >= 6 && dyn_Ag.cols() == model_nv)
+        {
+            const Eigen::MatrixXd AgLeft = dyn_Ag.block(3, 18, 3, 5);
+            leftArmVelCmd = -cfg_weld_left_arm_momentum_gain *
+                            AgLeft.completeOrthogonalDecomposition().pseudoInverse() * hAng;
+            const double velNorm = leftArmVelCmd.norm();
+            if (velNorm > cfg_weld_left_arm_vel_limit)
+            {
+                leftArmVelCmd *= cfg_weld_left_arm_vel_limit / velNorm;
+            }
+        }
+        leftArmVelCmd *= leftArmTaskScale;
+        weld_left_arm_balance_vel = leftArmVelCmd;
+        kin_tasks_weld.taskLib[id].errX = target_left_arm - q.block<5, 1>(19, 0);
+        kin_tasks_weld.taskLib[id].derrX = leftArmVelCmd - dq.block<5, 1>(18, 0);
+        kin_tasks_weld.taskLib[id].ddxDes = Eigen::VectorXd::Zero(5);
+        kin_tasks_weld.taskLib[id].dxDes = leftArmVelCmd;
+        kin_tasks_weld.taskLib[id].kp = Eigen::MatrixXd::Identity(5, 5) * (cfg_weld_left_arm_kp * leftArmTaskScale);
+        kin_tasks_weld.taskLib[id].kd = Eigen::MatrixXd::Identity(5, 5) * (cfg_weld_left_arm_kd * leftArmTaskScale);
+        kin_tasks_weld.taskLib[id].J = Eigen::MatrixXd::Zero(5, model_nv);
+        if (isLeftArmBalanceState && leftArmTaskScale > 1.0e-6 &&
+            (cfg_weld_left_arm_kp > 1.0e-9 || cfg_weld_left_arm_kd > 1.0e-9 ||
+             cfg_weld_left_arm_momentum_gain > 1.0e-9))
+        {
+            kin_tasks_weld.taskLib[id].J.block(0, 18, 5, 5) = Eigen::MatrixXd::Identity(5, 5);
+        }
+        else
+        {
+            kin_tasks_weld.taskLib[id].errX.setZero();
+            kin_tasks_weld.taskLib[id].derrX.setZero();
+            kin_tasks_weld.taskLib[id].dxDes.setZero();
+        }
+        kin_tasks_weld.taskLib[id].dJ = Eigen::MatrixXd::Zero(5, model_nv);
+        kin_tasks_weld.taskLib[id].W.diagonal() = Eigen::VectorXd::Ones(model_nv);
+    }
+
     if (motionStateCur == DataBus::Walk || motionStateCur == DataBus::Walk2Stand)
     {
         kin_tasks_walk.computeAll(des_delta_q, des_dq, des_ddq, dyn_M, dyn_M_inv, dq);
@@ -663,6 +999,23 @@ void WBC_priority_V4::computeDdq(Pin_KinDyn_V4 &pinKinDynIn)
         delta_q_final_kin = kin_tasks_stand.out_delta_q;
         dq_final_kin = kin_tasks_stand.out_dq;
         ddq_final_kin = kin_tasks_stand.out_ddq;
+    }
+    else if (motionStateCur == DataBus::WeldPrepare || motionStateCur == DataBus::Weld ||
+             motionStateCur == DataBus::WeldHold || motionStateCur == DataBus::WeldRecover)
+    {
+        kin_tasks_weld.computeAll(des_delta_q, des_dq, des_ddq, dyn_M, dyn_M_inv, dq);
+        delta_q_final_kin = kin_tasks_weld.out_delta_q;
+        dq_final_kin = kin_tasks_weld.out_dq;
+        ddq_final_kin = kin_tasks_weld.out_ddq;
+        const double deltaQLimit = std::max(0.0, cfg_weld_arm_delta_q_limit);
+        const double dqLimit = std::max(0.0, cfg_weld_arm_dq_limit);
+        const double ddqLimit = std::max(0.0, cfg_weld_arm_ddq_limit);
+        for (int i = 18; i < 28 && i < model_nv; ++i)
+        {
+            delta_q_final_kin(i) = std::clamp(delta_q_final_kin(i), -deltaQLimit, deltaQLimit);
+            dq_final_kin(i) = std::clamp(dq_final_kin(i), -dqLimit, dqLimit);
+            ddq_final_kin(i) = std::clamp(ddq_final_kin(i), -ddqLimit, ddqLimit);
+        }
     }
     else
     {

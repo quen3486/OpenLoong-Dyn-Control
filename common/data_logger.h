@@ -14,6 +14,7 @@ Feel free to use in any purpose, and cite OpenLoong-Dynamics-Control in any styl
 
 #include "string"
 #include "vector"
+#include <unordered_map>
 #include "quill/Quill.h"
 #include "fmt/format.h"
 #include <iostream>
@@ -33,6 +34,7 @@ public:
     void recItermData(const std::string &name, const std::vector<double> &dataIn);
     void finishLine();
 private:
+    int getItemIndex(const std::string &name) const;
     int colCout{0};
     std::string filePath, fileName;
     std::string fileFolder;
@@ -42,9 +44,9 @@ private:
     std::vector<int> recItemLen;
     std::vector<int> recItemStartCol;
     std::vector<int> recItemEndCol;
+    std::unordered_map<std::string, int> recItemIndex;
     std::vector<bool> isItemDataIn;
     quill::Logger *dl;
     quill::Handler *file_handler;
 };
-
 

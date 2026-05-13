@@ -92,10 +92,10 @@ void StateEst::init(DataBus &Data)
     pWL = R * fe_l_pos_L;
     pWR = R * fe_r_pos_L;
     double zOff = -(pWR(2) + pWL(2)) / 2.0 + 0.07;
-    X0 << 0, 0, zOff,
+    X0 << Data.basePos[0], Data.basePos[1], zOff,
         0, 0, 0,
-        pWL(0), pWL(1), 0.07,
-        pWR(0), pWR(1), 0.07,
+        Data.basePos[0] + pWL(0), Data.basePos[1] + pWL(1), 0.07,
+        Data.basePos[0] + pWR(0), Data.basePos[1] + pWR(1), 0.07,
         0, 0, 0;
     P0.setZero();
     for (int i = 0; i < 15; i++)

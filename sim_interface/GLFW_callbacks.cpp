@@ -6,6 +6,8 @@ Feel free to use in any purpose, and cite OpenLoong-Dynamics-Control in any styl
  <web@openloong.org.cn>
 */
 #include "GLFW_callbacks.h"
+#include <chrono>
+#include <iostream>
 
 UIctr::UIctr(mjModel *modelIn, mjData *dataIn) {
     mj_model=modelIn;
@@ -52,7 +54,7 @@ void UIctr::iniGLFW() {
 void UIctr::createWindow(const char* windowTitle, bool saveVideo) {
     window=glfwCreateWindow(width, height, windowTitle, NULL, NULL);
     glfwMakeContextCurrent(window);
-    glfwSwapInterval(1);
+    glfwSwapInterval(0);
     mjv_defaultCamera(&cam);
     // Set up mujoco visualization objects
     // adjust view point
@@ -101,7 +103,15 @@ void UIctr::createWindow(const char* windowTitle, bool saveVideo) {
     }
 }
 
+void UIctr::setGeomGroupVisible(int group, bool visible) {
+    if (group >= 0 && group < mjNGROUP) {
+        opt.geomgroup[group] = visible ? 1 : 0;
+    }
+}
+
 void UIctr::updateScene() {
+    static int slowRenderWarnings = 0;
+    const auto updateStart = std::chrono::steady_clock::now();
     if (!isContinuous)
         runSim= false;
 
@@ -127,8 +137,10 @@ void UIctr::updateScene() {
 //        UIctr::opt.flags[mjVIS_JOINT]  = 1 ;
 
     // update scene and render
+    const auto sceneStart = std::chrono::steady_clock::now();
     mjv_updateScene(mj_model, mj_data, &opt, NULL, &cam, mjCAT_ALL, &scn);
     glfwGetFramebufferSize(window, &viewport.width, &viewport.height);
+    const auto renderStart = std::chrono::steady_clock::now();
     mjr_render(viewport, &scn, &con);
     std::string timeStr = "Simulation Time: " + std::to_string(mj_data->time);
     char buffer[100];
@@ -138,9 +150,26 @@ void UIctr::updateScene() {
 
 
     // swap OpenGL buffers (blocking call due to v-sync)
+    const auto swapStart = std::chrono::steady_clock::now();
     glfwSwapBuffers(window);
     // process pending GUI events, call GLFW callbacks
+    const auto pollStart = std::chrono::steady_clock::now();
     glfwPollEvents();
+    const auto updateEnd = std::chrono::steady_clock::now();
+    const double updateMs = std::chrono::duration<double, std::milli>(updateEnd - updateStart).count();
+    if (updateMs > 50.0 && slowRenderWarnings < 5)
+    {
+        const double sceneMs = std::chrono::duration<double, std::milli>(renderStart - sceneStart).count();
+        const double renderMs = std::chrono::duration<double, std::milli>(swapStart - renderStart).count();
+        const double swapMs = std::chrono::duration<double, std::milli>(pollStart - swapStart).count();
+        const double pollMs = std::chrono::duration<double, std::milli>(updateEnd - pollStart).count();
+        std::cerr << "[UI] slow render frame: total=" << updateMs
+                  << " ms, scene=" << sceneMs
+                  << " ms, render=" << renderMs
+                  << " ms, swap=" << swapMs
+                  << " ms, poll=" << pollMs << " ms" << std::endl;
+        slowRenderWarnings++;
+    }
 
     if (save_video)
     {

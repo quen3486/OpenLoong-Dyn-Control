@@ -351,7 +351,7 @@ check_pattern "$CFG_FILE" '"contact_force_blend_time_sec"\s*:\s*0\.03' "新支�
 check_pattern "$START_SCRIPT" 'BIN_NAME="walk_mpc_wbc_leg"' "启动脚本固定leg真机demo"
 check_pattern "$START_SCRIPT" '--ros2-real' "启动脚本通过显式参数进入ros2_real"
 check_pattern "$START_SCRIPT" 'start_rviz_real_leg\.sh' "真机启动固定开启RViz"
-check_no_pattern "$START_SCRIPT" 'CONTROL_MODE|OPENLOONG_CONTROL_MODE|ROBOT_VARIANT|TARGET|START_RVIZ|SIM_ROS_PUBLISH_DT|mujoco_ros2|AUTOWALK' "启动脚本不再提供仿真/机型/AUTOWALK切换"
+check_no_pattern "$START_SCRIPT" 'CONTROL_MODE|ROBOT_VARIANT|TARGET|START_RVIZ|SIM_ROS_PUBLISH_DT|mujoco_ros2|AUTOWALK' "启动脚本不再提供仿真/机型/AUTOWALK切换"
 check_pattern "$RVIZ_CFG" 'Fixed Frame: base_link' "真机RViz Fixed Frame对齐ref为base_link"
 check_pattern "$RVIZ_SCRIPT" 'cleanup_old_robot_state_publishers' "RViz脚本启动前清理旧robot_state_publisher"
 check_pattern "$RVIZ_SCRIPT" '/tmp/openloong_rviz_urdf\.' "RViz脚本只清理本脚本生成的临时URDF RSP"

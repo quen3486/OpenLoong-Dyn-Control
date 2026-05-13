@@ -34,6 +34,18 @@ public:
     double cfg_posrot_kd_pitch{10.0};
     double cfg_swing_kp{500.0};
     double cfg_swing_kd{20.0};
+    double cfg_weld_hand_kp{120.0};
+    double cfg_weld_hand_kd{24.0};
+    double cfg_weld_arm_delta_q_limit{0.018};
+    double cfg_weld_arm_dq_limit{0.60};
+    double cfg_weld_arm_ddq_limit{10.0};
+    double cfg_weld_left_arm_kp{20.0};
+    double cfg_weld_left_arm_kd{4.0};
+    double cfg_weld_ang_momentum_damping{0.0};
+    double cfg_weld_left_arm_momentum_gain{0.02};
+    double cfg_weld_left_arm_vel_limit{0.10};
+    double cfg_weld_right_arm_recover_kp{8.0};
+    double cfg_weld_right_arm_recover_kd{2.0};
     Eigen::MatrixXd dyn_M, dyn_M_inv, dyn_Ag, dyn_dAg;
     Eigen::VectorXd dyn_Non;
     Eigen::MatrixXd Jc, dJc, Jfe, dJfe, Jfe_L, Jfe_R;
@@ -62,8 +74,9 @@ public:
     double r_shoulder_pitch = 0;
     Eigen::Vector3d pCoMDes, pCoMCur;
 
-    PriorityTasks kin_tasks_walk, kin_tasks_stand;
+    PriorityTasks kin_tasks_walk, kin_tasks_stand, kin_tasks_weld;
     void setQini(const Eigen::VectorXd &qIniDes, const Eigen::VectorXd &qIniCur);
+    void setJointTorqueLimits(const Eigen::VectorXd &tauLowIn, const Eigen::VectorXd &tauUppIn);
     void computeTau();
     void dataBusRead(const DataBus &robotState);
     void dataBusWrite(DataBus &robotState);
@@ -82,17 +95,29 @@ private:
     void copy_Eigen_to_real_t(qpOASES::real_t* target, const Eigen::MatrixXd &source, int nRows, int nCols);
     Eigen::MatrixXd J_base, dJ_base, Jcom;
     Eigen::MatrixXd J_hip_link;
+    Eigen::VectorXd tauJointLow, tauJointUpp;
+    bool jointTorqueLimitEnabled{false};
     Eigen::Vector3d base_pos_des, base_pos, base_rpy_des, base_rpy_cur, hip_link_pos;
     Eigen::Matrix3d hip_link_rot, base_rot;
     Eigen::VectorXd swing_fe_pos_des_W, swing_fe_rpy_des_W;
     Eigen::Vector3d stance_fe_pos_cur_W;
     Eigen::Matrix3d stance_fe_rot_cur_W;
     Eigen::Vector3d stanceDesPos_W;
+    Eigen::Vector3d weld_tcp_pos_des_W;
+    Eigen::Matrix3d weld_tcp_rot_des_W;
+    Eigen::Vector3d weld_tcp_linear_vel_des_W;
+    Eigen::Vector3d weld_tcp_angular_vel_des_W;
+    Eigen::Vector3d weld_tcp_linear_acc_des_W;
+    Eigen::Vector3d weld_tcp_angular_acc_des_W;
+    Eigen::VectorXd weld_left_arm_balance_vel;
+    double weld_prepare_phase{0.0};
+    double weld_recover_phase{0.0};
+    bool weld_active{false};
     Eigen::VectorXd des_ddq, des_dq, des_delta_q, des_q;
     Eigen::VectorXd qIniDes, qIniCur;
 
     static const int QP_nv_des=18;
-    static const int QP_nc_des=22;
+    static const int QP_nc_des=44;
 
     qpOASES::real_t qp_H[QP_nv_des*QP_nv_des];
     qpOASES::real_t qp_A[QP_nc_des*QP_nv_des];

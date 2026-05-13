@@ -6,6 +6,7 @@ Feel free to use in any purpose, and cite OpenLoong-Dynamics-Control in any styl
  <web@openloong.org.cn>
 */
 #include "data_logger.h"
+#include <algorithm>
 
 DataLogger::DataLogger(std::string fileNameIn) {
     filePath=fileNameIn;
@@ -20,11 +21,11 @@ DataLogger::DataLogger(std::string fileNameIn) {
 }
 
 void DataLogger::addIterm(const std::string &name, const int &len) {
-    auto it = std::find(recItemName.begin(), recItemName.end(), name);
-    if (it != recItemName.end()) {
+    if (recItemIndex.find(name) != recItemIndex.end()) {
         std::cout << name<< " has already been used!!!!!"<< std::endl;
         throw std::runtime_error("Failed to add rec item.");
     }
+    recItemIndex[name] = static_cast<int>(recItemName.size());
     recItemName.push_back(name);
     recItemLen.push_back(len);
     recItemStartCol.push_back(colCout);
@@ -51,17 +52,23 @@ void DataLogger::finishItermAdding() {
 }
 
 void DataLogger::startNewLine() {
-    recValue.resize(colCout,0.0);
-    isItemDataIn.resize(recItemName.size(), false);
+    if (static_cast<int>(recValue.size()) != colCout) {
+        recValue.resize(colCout, 0.0);
+    }
+    std::fill(isItemDataIn.begin(), isItemDataIn.end(), false);
 }
 
-void DataLogger::recItermData(const std::string &name, double *dataIn) {
-    auto it = std::find(recItemName.begin(), recItemName.end(), name);
-    if (it == recItemName.end()) {
+int DataLogger::getItemIndex(const std::string &name) const {
+    auto it = recItemIndex.find(name);
+    if (it == recItemIndex.end()) {
         std::cout << name<< " has not been added!!!!!"<< std::endl;
         throw std::runtime_error("Failed to rec item.");
     }
-    int curIdx=std::distance(recItemName.begin(), it);
+    return it->second;
+}
+
+void DataLogger::recItermData(const std::string &name, double *dataIn) {
+    int curIdx = getItemIndex(name);
     for (int i=0;i<recItemLen[curIdx];i++)
     {
         recValue[i+recItemStartCol[curIdx]]=dataIn[i];
@@ -70,12 +77,7 @@ void DataLogger::recItermData(const std::string &name, double *dataIn) {
 }
 
 void DataLogger::recItermData(const std::string &name, double dataIn) {
-    auto it = std::find(recItemName.begin(), recItemName.end(), name);
-    if (it == recItemName.end()) {
-        std::cout << name<< " has not been added!!!!!"<< std::endl;
-        throw std::runtime_error("Failed to rec item.");
-    }
-    int curIdx=std::distance(recItemName.begin(), it);
+    int curIdx = getItemIndex(name);
     for (int i=0;i<recItemLen[curIdx];i++)
     {
         recValue[i+recItemStartCol[curIdx]]=dataIn;
@@ -84,12 +86,7 @@ void DataLogger::recItermData(const std::string &name, double dataIn) {
 }
 
 void DataLogger::recItermData(const std::string &name, const Eigen::VectorXd &dataIn) {
-    auto it = std::find(recItemName.begin(), recItemName.end(), name);
-    if (it == recItemName.end()) {
-        std::cout << name<< " has not been added!!!!!"<< std::endl;
-        throw std::runtime_error("Failed to rec item.");
-    }
-    int curIdx=std::distance(recItemName.begin(), it);
+    int curIdx = getItemIndex(name);
     for (int i=0;i<recItemLen[curIdx];i++)
     {
         recValue[i+recItemStartCol[curIdx]]=dataIn(i);
@@ -98,12 +95,7 @@ void DataLogger::recItermData(const std::string &name, const Eigen::VectorXd &da
 }
 
 void DataLogger::recItermData(const std::string &name, const std::vector<double> &dataIn) {
-    auto it = std::find(recItemName.begin(), recItemName.end(), name);
-    if (it == recItemName.end()) {
-        std::cout << name<< " has not been added!!!!!"<< std::endl;
-        throw std::runtime_error("Failed to rec item.");
-    }
-    int curIdx=std::distance(recItemName.begin(), it);
+    int curIdx = getItemIndex(name);
     for (int i=0;i<recItemLen[curIdx];i++)
     {
         recValue[i+recItemStartCol[curIdx]]=dataIn[i];
@@ -120,8 +112,6 @@ void DataLogger::finishLine() {
     tmpStr = fmt::format("{:.6e}", fmt::join(recValue, ","));
     LOG_INFO(dl, "{}", tmpStr);
 }
-
-
 
 
 

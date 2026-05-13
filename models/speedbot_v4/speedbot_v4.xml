@@ -163,6 +163,12 @@
                     <inertial pos="0.0029058 -0.13137 1.135e-05" quat="0.48083 0.518971 -0.480333 0.518412" mass="0.63743" diaginertia="0.0011544 0.00112475 0.000340641"/>
                     <joint name="right_wrist_roll_joint" pos="0 0 0" axis="0 1 0" range="-1.97 1.97" actuatorfrcrange="-20 20"/>
                     <geom type="mesh" contype="0" conaffinity="0" group="1" density="0" rgba="0.69804 0.69804 0.69804 1" mesh="right_wrist_roll"/>
+                    <geom name="weld_tcp_marker" type="sphere" pos="0 -0.215 0" size="0.025"
+                          contype="0" conaffinity="0" density="0" group="1" rgba="1 0.85 0.05 1"/>
+                    <geom name="weld_tcp_marker_x" type="capsule" fromto="-0.035 -0.215 0 0.035 -0.215 0" size="0.004"
+                          contype="0" conaffinity="0" density="0" group="1" rgba="1 0.05 0.02 1"/>
+                    <geom name="weld_tcp_marker_y" type="capsule" fromto="0 -0.25 0 0 -0.18 0" size="0.004"
+                          contype="0" conaffinity="0" density="0" group="1" rgba="1 0.05 0.02 1"/>
                   </body>
                 </body>
               </body>

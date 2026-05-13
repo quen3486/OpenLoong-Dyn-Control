@@ -22,6 +22,7 @@
 #include "data_bus.h"
 #include <string>
 #include "json/json.h"
+#include <array>
 #include <vector>
 
 class Pin_KinDyn_V4
@@ -92,6 +93,10 @@ public:
     void computeDyn();
     IkRes computeInK_Leg(const Eigen::Matrix3d &Rdes_L, const Eigen::Vector3d &Pdes_L, const Eigen::Matrix3d &Rdes_R, const Eigen::Vector3d &Pdes_R);
     IkRes computeInK_Hand(const Eigen::Matrix3d &Rdes_L, const Eigen::Vector3d &Pdes_L, const Eigen::Matrix3d &Rdes_R, const Eigen::Vector3d &Pdes_R);
+    IkRes computeRightHandPosIK(const Eigen::Vector3d &Pdes_R, const Eigen::VectorXd &qSeedFixed);
+    Eigen::Vector3d computeRightHandPosFixed(const Eigen::VectorXd &qFixed);
+    std::array<Eigen::Vector3d, 5> computeRightArmKeypointsFixed(const Eigen::VectorXd &qFixed);
+    Eigen::Vector3d computeFixedCoM(const Eigen::VectorXd &qFixed);
     Eigen::VectorXd integrateDIY(const Eigen::VectorXd &qI, const Eigen::VectorXd &dqI);
     static Eigen::Quaterniond intQuat(const Eigen::Quaterniond &quat, const Eigen::Matrix<double, 3, 1> &w);
     void workspaceConstraint(Eigen::VectorXd &qFT, Eigen::VectorXd &tauJointFT);

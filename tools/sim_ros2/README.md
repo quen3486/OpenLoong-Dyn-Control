@@ -31,8 +31,8 @@ v4 使用完整机型配置：
 
 ```bash
 cd /home/huangkun/workspaces/mpc/Openloong-dyn-control
-OPENLOONG_RVIZ_CONFIG=tools/real_robot/speedbot_v4.rviz \
-OPENLOONG_ROBOT_URDF=models/speedbot_v4/speedbot_v4.urdf \
+RVIZ_CONFIG=tools/real_robot/speedbot_v4.rviz \
+ROBOT_URDF=models/speedbot_v4/speedbot_v4.urdf \
 ./tools/real_robot/start_rviz_real_leg.sh
 ```
 
