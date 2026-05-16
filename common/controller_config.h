@@ -11,13 +11,12 @@ Feel free to use in any purpose, and cite OpenLoong-Dynamics-Control in any styl
 
 struct ControllerConfig
 {
-    bool simEnableRos2StatePub{false};
     double simRosPublishDt{0.01};
 
     // ROS2 topic names for real backend
     std::string rosTopicImu{"/imu/data"};
     std::string rosTopicJointStates{"/joint_states"};
-    std::string rosTopicActionCmd{"/rl_motion_control_command_with_torque"};
+    std::string rosTopicActionCmd{"/rl_motion_control_command"};
     double rosDataTimeoutSec{0.2};
     double realPvtTorqueLimitScale{0.5};
 

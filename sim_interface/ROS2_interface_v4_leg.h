@@ -1,7 +1,7 @@
 /*
  * ROS2 interface for speedbot_v4 leg-only real robot backend.
- * It subscribes IMU/joint state feedback and publishes the RL deployment
- * action layout: 29 position targets plus 29 torque feedforward values.
+ * It can subscribe IMU/joint state feedback for the real backend and publish
+ * the unified 69-value command topic: [pos23][vel23][torque23].
  */
 #pragma once
 
@@ -32,12 +32,14 @@ public:
     ~ROS2_Interface_V4_Leg();
 
     bool initialize(const ControllerConfig &config, std::string *errMsg = nullptr);
+    bool initializeCommandPublisherOnly(const ControllerConfig &config, std::string *errMsg = nullptr);
     void spinSome();
     bool isReady() const;
     bool hasFreshData(double timeoutSec) const;
 
     void dataBusWrite(DataBus &busIn);
     void setMotorsCommand(const std::vector<double> &qDesIn,
+                          const std::vector<double> &dqDesIn,
                           const std::vector<double> &tauFfIn);
 
 private:
@@ -63,9 +65,12 @@ private:
     bool isInitialized_{false};
     bool imuReceived_{false};
     bool jointStatesReceived_{false};
+    bool jointStatesMappingPrinted_{false};
     bool yawInited_{false};
     double yawSingle_{0.0};
     int yawRound_{0};
+    size_t jointStatesInvalidWarnCount_{0};
+    size_t commandInvalidWarnCount_{0};
 
     mutable std::mutex dataMutex_;
     TimePoint lastImuTime_;

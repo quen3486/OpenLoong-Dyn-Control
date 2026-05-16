@@ -43,13 +43,13 @@
   </asset>
 
   <worldbody>
-    <body name="base_link" pos="0 0 1.003">
+    <body name="base_link" pos="0.0080635 0 1.003">
       <freejoint name="float_base" />
-      <site name="imu" quat="1 0 0 0" />    
-      <inertial pos="-0.10125 -1.4179e-07 -0.041448" quat="0.68958 0.68958 0.156458 -0.156457" mass="7.4135" diaginertia="0.0292714 0.0262626 0.014902"/>
-      <geom type="mesh" contype="0" conaffinity="0" group="1" density="0" rgba="0.69804 0.69804 0.69804 1" mesh="base_link"/>
-      <geom type="mesh" rgba="0.69804 0.69804 0.69804 1" mesh="base_link"/>
-      <body name="left_hip_roll" pos="-0.11644 0.1225 -0.04795">
+      <site name="imu" pos="0 0 0" quat="1 0 0 0" />
+      <inertial pos="-0.1093135 -1.4179e-07 -0.041448" quat="0.68958 0.68958 0.156458 -0.156457" mass="7.4135" diaginertia="0.0292714 0.0262626 0.014902"/>
+      <geom pos="-0.0080635 0 0" type="mesh" contype="0" conaffinity="0" group="1" density="0" rgba="0.69804 0.69804 0.69804 1" mesh="base_link"/>
+      <geom pos="-0.0080635 0 0" type="mesh" rgba="0.69804 0.69804 0.69804 1" mesh="base_link"/>
+      <body name="left_hip_roll" pos="-0.1245035 0.1225 -0.04795">
         <inertial pos="0.10837 -2.3489e-06 -0.020356" quat="-2.31903e-06 0.786727 -5.4744e-06 0.617301" mass="2.1827" diaginertia="0.00347587 0.0032228 0.00284013"/>
         <joint name="left_hip_roll_joint" pos="0 0 0" axis="1 0 0" range="-0.17 0.44" actuatorfrcrange="-267 267"/>
         <geom type="mesh" contype="0" conaffinity="0" group="1" density="0" rgba="0.69804 0.69804 0.69804 1" mesh="left_hip_roll"/>
@@ -81,7 +81,7 @@
           </body>
         </body>
       </body>
-      <body name="right_hip_roll" pos="-0.11644 -0.1225 -0.04795">
+      <body name="right_hip_roll" pos="-0.1245035 -0.1225 -0.04795">
         <inertial pos="0.10837 -2.3489e-06 -0.020356" quat="-2.31903e-06 0.786727 -5.4744e-06 0.617301" mass="2.1827" diaginertia="0.00347587 0.0032228 0.00284013"/>
         <joint name="right_hip_roll_joint" pos="0 0 0" axis="1 0 0" range="-0.44 0.17" actuatorfrcrange="-267 267"/>
         <geom type="mesh" contype="0" conaffinity="0" group="1" density="0" rgba="0.69804 0.69804 0.69804 1" mesh="right_hip_roll"/>
@@ -113,7 +113,7 @@
           </body>
         </body>
       </body>
-      <body name="waist_yaw" pos="0.0080635 0 0.0573">
+      <body name="waist_yaw" pos="0 0 0.0573">
         <inertial pos="0.001283 -7.589e-05 0.20559" quat="0.501725 0.497653 -0.502492 0.498112" mass="10.4394" diaginertia="0.033042 0.0323261 0.0304469"/>
         <geom type="mesh" contype="0" conaffinity="0" group="1" density="0" rgba="0.75294 0.75294 0.75294 1" mesh="waist_yaw"/>
         <geom type="mesh" rgba="0.75294 0.75294 0.75294 1" mesh="waist_yaw"/>

@@ -5,12 +5,12 @@
   </mujoco>
   <link name="base_link">
     <inertial>
-      <origin xyz="-0.10125 -1.4179E-07 -0.041448" rpy="0 0 0" />
+      <origin xyz="-0.1093135 -1.4179E-07 -0.041448" rpy="0 0 0" />
       <mass value="7.4135" />
       <inertia ixx="0.028711" ixy="2.4853E-08" ixz="-0.0011713" iyy="0.014902" iyz="2.6749E-09" izz="0.026823" />
     </inertial>
     <visual>
-      <origin xyz="0 0 0" rpy="0 0 0" />
+      <origin xyz="-0.0080635 0 0" rpy="0 0 0" />
       <geometry>
         <mesh filename="./meshes/base_link.STL" />
       </geometry>
@@ -19,7 +19,7 @@
       </material>
     </visual>
     <collision>
-      <origin xyz="0 0 0" rpy="0 0 0" />
+      <origin xyz="-0.0080635 0 0" rpy="0 0 0" />
       <geometry>
         <mesh filename="./meshes/base_link.STL" />
       </geometry>
@@ -42,7 +42,7 @@
     </visual>
   </link>
   <joint name="left_hip_roll_joint" type="revolute">
-    <origin xyz="-0.11644 0.1225 -0.04795" rpy="0 0 0" />
+    <origin xyz="-0.1245035 0.1225 -0.04795" rpy="0 0 0" />
     <parent link="base_link" />
     <child link="left_hip_roll" />
     <axis xyz="1 0 0" />
@@ -186,7 +186,7 @@
     </visual>
   </link>
   <joint name="right_hip_roll_joint" type="revolute">
-    <origin xyz="-0.11644 -0.1225 -0.04795" rpy="0 0 0" />
+    <origin xyz="-0.1245035 -0.1225 -0.04795" rpy="0 0 0" />
     <parent link="base_link" />
     <child link="right_hip_roll" />
     <axis xyz="1 0 0" />
@@ -336,7 +336,7 @@
     </collision>
   </link>
   <joint name="waist_yaw_joint" type="fixed">
-    <origin xyz="0.0080635 0 0.0573" rpy="0 0 0" />
+    <origin xyz="0 0 0.0573" rpy="0 0 0" />
     <parent link="base_link" />
     <child link="waist_yaw" />
   </joint>
@@ -357,7 +357,7 @@
     </visual>
   </link>
   <joint name="left_shoulder_pitch_joint" type="fixed">
-    <origin xyz="0.0080635 0.098693 0.42818" rpy="0 0 0" />
+    <origin xyz="0 0.098693 0.42818" rpy="0 0 0" />
     <parent link="base_link" />
     <child link="left_shoulder_pitch" />
   </joint>
@@ -462,7 +462,7 @@
     </visual>
   </link>
   <joint name="right_shoulder_pitch_joint" type="fixed">
-    <origin xyz="0.0080635 -0.098693 0.42818" rpy="0 0 0" />
+    <origin xyz="0 -0.098693 0.42818" rpy="0 0 0" />
     <parent link="base_link" />
     <child link="right_shoulder_pitch" />
   </joint>

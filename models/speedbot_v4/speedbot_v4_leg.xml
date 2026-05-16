@@ -42,13 +42,13 @@
     <mesh name="waist_yaw" file="waist_yaw.STL" />
   </asset>
   <worldbody>
-    <body name="base_link" pos="0 0 1.003">
+    <body name="base_link" pos="0.0080635 0 1.003">
       <freejoint name="float_base" />
-      <inertial mass="7.4135" pos="-0.10125 -1.4179E-07 -0.041448" fullinertia="0.028711 0.014902 0.026823 2.4853e-08 -0.0011713 2.6749e-09" />
-      <geom class="visual" pos="0 0 0" euler="0 0 0" rgba="0.69804 0.69804 0.69804 1" type="mesh" mesh="base_link" />
-      <geom class="collision" pos="0 0 0" euler="0 0 0" type="mesh" mesh="base_link" />
-      <site name="imu" quat="1 0 0 0" />
-      <body name="left_hip_roll" pos="-0.11644 0.1225 -0.04795">
+      <inertial mass="7.4135" pos="-0.1093135 -1.4179E-07 -0.041448" fullinertia="0.028711 0.014902 0.026823 2.4853e-08 -0.0011713 2.6749e-09" />
+      <geom class="visual" pos="-0.0080635 0 0" euler="0 0 0" rgba="0.69804 0.69804 0.69804 1" type="mesh" mesh="base_link" />
+      <geom class="collision" pos="-0.0080635 0 0" euler="0 0 0" type="mesh" mesh="base_link" />
+      <site name="imu" pos="0 0 0" quat="1 0 0 0" />
+      <body name="left_hip_roll" pos="-0.1245035 0.1225 -0.04795">
         <joint name="left_hip_roll_joint" axis="1 0 0" range="-0.17 0.44" />
         <inertial mass="2.1827" pos="0.10837 -2.3489E-06 -0.020356" fullinertia="0.0028761 0.0032228 0.0034399 4.6498e-10 0.00014689 -3.1042e-09" />
         <geom class="visual" pos="0 0 0" euler="0 0 0" rgba="0.69804 0.69804 0.69804 1" type="mesh" mesh="left_hip_roll" />
@@ -83,7 +83,7 @@
           </body>
         </body>
       </body>
-      <body name="right_hip_roll" pos="-0.11644 -0.1225 -0.04795">
+      <body name="right_hip_roll" pos="-0.1245035 -0.1225 -0.04795">
         <joint name="right_hip_roll_joint" axis="1 0 0" range="-0.44 0.17" />
         <inertial mass="2.1827" pos="0.10837 -2.3489E-06 -0.020356" fullinertia="0.0028761 0.0032228 0.0034399 4.6498e-10 0.00014689 -3.1042e-09" />
         <geom class="visual" pos="0 0 0" euler="0 0 0" rgba="0.69804 0.69804 0.69804 1" type="mesh" mesh="right_hip_roll" />
@@ -118,13 +118,13 @@
           </body>
         </body>
       </body>
-      <body name="waist_yaw" pos="0.0080635 0 0.0573">
+      <body name="waist_yaw" pos="0 0 0.0573">
         <inertial mass="10.4394" pos="0.001283 -7.589E-05 0.20559" fullinertia="0.032326 0.030447 0.033042 -1.5883e-05 -8.8259e-07 -8.047e-07" />
         <geom class="visual" pos="0 0 0" euler="0 0 0" rgba="0.75294 0.75294 0.75294 1" type="mesh" mesh="waist_yaw" />
         <geom class="collision" pos="0 0 0" euler="0 0 0" type="mesh" mesh="waist_yaw" />
         <body name="upper_body_link" pos="0 0 0.3" />
       </body>
-      <body name="left_shoulder_pitch" pos="0.0080635 0.098693 0.42818" euler="0 0 0">
+      <body name="left_shoulder_pitch" pos="0 0.098693 0.42818" euler="0 0 0">
         <inertial mass="1.4073" pos="0.0091062 0.13568 0.00087007" fullinertia="0.0018568 0.0013884 0.0017462 -5.7776e-05 1.9795e-10 -8.0408e-10" />
         <geom class="visual" pos="0 0 0" euler="0 0 0" rgba="0.69804 0.69804 0.69804 1" type="mesh" mesh="left_shoulder_pitch" />
         <body name="left_shoulder_roll" pos="0.0444 0.14081 0.00087012" euler="-1.5807 0 0">
@@ -144,7 +144,7 @@
           </body>
         </body>
       </body>
-      <body name="right_shoulder_pitch" pos="0.0080635 -0.098693 0.42818" euler="0 0 0">
+      <body name="right_shoulder_pitch" pos="0 -0.098693 0.42818" euler="0 0 0">
         <inertial mass="1.4073" pos="0.0091062 -0.13568 0.00087017" fullinertia="0.0018568 0.0013884 0.0017462 5.7776e-05 -1.9795e-10 -8.0408e-10" />
         <geom class="visual" pos="0 0 0" euler="0 0 0" rgba="0.69804 0.69804 0.69804 1" type="mesh" mesh="right_shoulder_pitch" />
         <body name="right_shoulder_roll" pos="0.0444 -0.14081 0.00087012" euler="1.5807 0 0">

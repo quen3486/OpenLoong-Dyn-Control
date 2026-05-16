@@ -9,6 +9,44 @@
 #include <unordered_map>
 
 #if OPENLOONG_HAS_ROS2
+namespace
+{
+constexpr size_t kLegJointCount = 12;
+constexpr size_t kCommandJointCount = 23;
+constexpr size_t kCommandSections = 3;
+constexpr size_t kCommandSize = kCommandJointCount * kCommandSections;
+
+constexpr std::array<const char *, kCommandJointCount> kCommandJointOrder = {
+    "left_hip_roll_joint",
+    "left_hip_yaw_joint",
+    "left_hip_pitch_joint",
+    "left_knee_joint",
+    "left_ankle_pitch_joint",
+    "left_ankle_roll_joint",
+    "right_hip_roll_joint",
+    "right_hip_yaw_joint",
+    "right_hip_pitch_joint",
+    "right_knee_joint",
+    "right_ankle_pitch_joint",
+    "right_ankle_roll_joint",
+    "waist_yaw_joint",
+    "left_shoulder_pitch_joint",
+    "left_shoulder_roll_joint",
+    "left_shoulder_yaw_joint",
+    "left_elbow_joint",
+    "left_wrist_roll_joint",
+    "right_shoulder_pitch_joint",
+    "right_shoulder_roll_joint",
+    "right_shoulder_yaw_joint",
+    "right_elbow_joint",
+    "right_wrist_roll_joint"};
+
+constexpr std::array<double, kCommandJointCount> kDefaultCommandPosition{{0.0}};
+
+static_assert(kCommandJointOrder.size() == kCommandJointCount, "command joint order size mismatch");
+static_assert(kCommandSize == 69, "speedbot_v4 real command contract must stay 69 values");
+} // namespace
+
 const std::array<std::string, 12> ROS2_Interface_V4_Leg::kJointNamesPinOrder = {
     "left_hip_roll_joint", "left_hip_yaw_joint", "left_hip_pitch_joint",
     "left_knee_joint", "left_ankle_pitch_joint", "left_ankle_roll_joint",
@@ -59,6 +97,47 @@ bool ROS2_Interface_V4_Leg::initialize(const ControllerConfig &config, std::stri
     {
         errMsg->clear();
     }
+    std::cout << "[ROS2] action command contract: Float64MultiArray[69]=[pos23][vel23][torque23], "
+              << kCommandJointOrder.front() << " ... " << kCommandJointOrder.back() << std::endl;
+    return true;
+#else
+    (void)config;
+    if (errMsg != nullptr)
+    {
+        *errMsg = "ROS2 support is disabled at build time.";
+    }
+    return false;
+#endif
+}
+
+bool ROS2_Interface_V4_Leg::initializeCommandPublisherOnly(const ControllerConfig &config, std::string *errMsg)
+{
+#if OPENLOONG_HAS_ROS2
+    topicActionCmd_ = config.rosTopicActionCmd;
+
+    if (!rclcpp::ok())
+    {
+        rclcpp::init(0, nullptr);
+    }
+
+    node_ = std::make_shared<rclcpp::Node>("openloong_mpc_wbc_leg_sim_real_openloop_cmd");
+    actionCmdPub_ = node_->create_publisher<std_msgs::msg::Float64MultiArray>(topicActionCmd_, 20);
+
+    executor_ = std::make_shared<rclcpp::executors::SingleThreadedExecutor>();
+    executor_->add_node(node_);
+
+    imuSub_.reset();
+    jointStatesSub_.reset();
+    imuReceived_ = false;
+    jointStatesReceived_ = false;
+    isInitialized_ = true;
+
+    if (errMsg != nullptr)
+    {
+        errMsg->clear();
+    }
+    std::cout << "[ROS2] action command contract: Float64MultiArray[69]=[pos23][vel23][torque23], "
+              << kCommandJointOrder.front() << " ... " << kCommandJointOrder.back() << std::endl;
     return true;
 #else
     (void)config;
@@ -193,6 +272,7 @@ void ROS2_Interface_V4_Leg::dataBusWrite(DataBus &busIn)
 }
 
 void ROS2_Interface_V4_Leg::setMotorsCommand(const std::vector<double> &qDesIn,
+                                             const std::vector<double> &dqDesIn,
                                              const std::vector<double> &tauFfIn)
 {
 #if OPENLOONG_HAS_ROS2
@@ -200,21 +280,53 @@ void ROS2_Interface_V4_Leg::setMotorsCommand(const std::vector<double> &qDesIn,
     {
         return;
     }
+
+    auto validFirst12 = [](const std::vector<double> &values)
+    {
+        if (values.size() < kLegJointCount)
+        {
+            return false;
+        }
+        for (size_t i = 0; i < kLegJointCount; i++)
+        {
+            if (!std::isfinite(values[i]))
+            {
+                return false;
+            }
+        }
+        return true;
+    };
+
+    if (!validFirst12(qDesIn) || !validFirst12(dqDesIn) || !validFirst12(tauFfIn))
+    {
+        const size_t warnCount = ++commandInvalidWarnCount_;
+        if (warnCount == 1 || warnCount % 1000 == 0)
+        {
+            std::cerr << "[ROS2] command publish skipped: expected finite leg vectors with at least 12 values each"
+                      << " to publish Float64MultiArray[69]=[pos23][vel23][torque23], got pos=" << qDesIn.size()
+                      << ", vel=" << dqDesIn.size()
+                      << ", torque=" << tauFfIn.size()
+                      << ", topic=" << topicActionCmd_ << std::endl;
+        }
+        return;
+    }
+
     std_msgs::msg::Float64MultiArray msg;
-    msg.data.assign(58, 0.0);
-    const size_t nPos = std::min<size_t>(12, qDesIn.size());
-    for (size_t i = 0; i < nPos; i++)
+    msg.data.assign(kCommandSize, 0.0);
+    for (size_t i = 0; i < kCommandJointCount; i++)
+    {
+        msg.data[i] = kDefaultCommandPosition[i];
+    }
+    for (size_t i = 0; i < kLegJointCount; i++)
     {
         msg.data[i] = qDesIn[i];
-    }
-    const size_t nTau = std::min<size_t>(12, tauFfIn.size());
-    for (size_t i = 0; i < nTau; i++)
-    {
-        msg.data[29 + i] = tauFfIn[i];
+        msg.data[kCommandJointCount + i] = dqDesIn[i];
+        msg.data[2 * kCommandJointCount + i] = tauFfIn[i];
     }
     actionCmdPub_->publish(msg);
 #else
     (void)qDesIn;
+    (void)dqDesIn;
     (void)tauFfIn;
 #endif
 }
@@ -246,43 +358,126 @@ void ROS2_Interface_V4_Leg::jointStatesCallback(const sensor_msgs::msg::JointSta
         nameToIndex[msg->name[i]] = i;
     }
 
-    std::lock_guard<std::mutex> lock(dataMutex_);
-    int foundCount = 0;
+    std::array<double, 12> posValues{{0.0}};
+    std::array<double, 12> velValues{{0.0}};
+    std::array<double, 12> effValues{{0.0}};
+    std::array<size_t, 12> msgIndices{{0}};
+    std::vector<std::string> issues;
+    auto addIssue = [&issues](const std::string &issue)
+    {
+        if (issues.size() < 6)
+        {
+            issues.push_back(issue);
+        }
+    };
+
+    bool valid = true;
+    int validCount = 0;
     for (size_t j = 0; j < kJointNamesPinOrder.size(); j++)
     {
         const auto it = nameToIndex.find(kJointNamesPinOrder[j]);
         if (it == nameToIndex.end())
         {
+            valid = false;
+            addIssue("missing " + kJointNamesPinOrder[j]);
             continue;
         }
         const size_t idx = it->second;
-        if (idx < msg->position.size())
+
+        bool fieldsPresent = true;
+        if (idx >= msg->position.size())
         {
-            motorsPos_[j] = msg->position[idx];
+            valid = false;
+            fieldsPresent = false;
+            addIssue(kJointNamesPinOrder[j] + " missing position");
         }
-        if (idx < msg->velocity.size())
+        if (idx >= msg->velocity.size())
         {
-            motorsVel_[j] = msg->velocity[idx];
+            valid = false;
+            fieldsPresent = false;
+            addIssue(kJointNamesPinOrder[j] + " missing velocity");
         }
-        else
+        if (idx >= msg->effort.size())
         {
-            motorsVel_[j] = 0.0;
+            valid = false;
+            fieldsPresent = false;
+            addIssue(kJointNamesPinOrder[j] + " missing effort");
         }
-        if (idx < msg->effort.size())
+        if (!fieldsPresent)
         {
-            motorsEff_[j] = msg->effort[idx];
+            continue;
         }
-        else
+
+        const double q = msg->position[idx];
+        const double dq = msg->velocity[idx];
+        const double tau = msg->effort[idx];
+        if (!std::isfinite(q) || !std::isfinite(dq) || !std::isfinite(tau))
         {
-            motorsEff_[j] = 0.0;
+            valid = false;
+            addIssue(kJointNamesPinOrder[j] + " contains NaN/Inf");
+            continue;
         }
-        foundCount++;
+
+        posValues[j] = q;
+        velValues[j] = dq;
+        effValues[j] = tau;
+        msgIndices[j] = idx;
+        validCount++;
     }
 
-    if (foundCount >= 10)
+    if (!valid || validCount != static_cast<int>(kJointNamesPinOrder.size()))
     {
+        bool shouldWarn = false;
+        size_t warnCount = 0;
+        {
+            std::lock_guard<std::mutex> lock(dataMutex_);
+            warnCount = ++jointStatesInvalidWarnCount_;
+            shouldWarn = (warnCount == 1 || warnCount % 5000 == 0);
+        }
+        if (shouldWarn)
+        {
+            std::cerr << "[ROS2] ignored invalid " << topicJointStates_
+                      << " feedback: ready " << validCount << "/"
+                      << kJointNamesPinOrder.size()
+                      << " joints with finite position/velocity/effort.";
+            for (const std::string &issue : issues)
+            {
+                std::cerr << " " << issue << ";";
+            }
+            if (issues.size() >= 6)
+            {
+                std::cerr << " ...";
+            }
+            std::cerr << std::endl;
+        }
+        return;
+    }
+
+    bool shouldPrintMapping = false;
+    {
+        std::lock_guard<std::mutex> lock(dataMutex_);
+        motorsPos_ = posValues;
+        motorsVel_ = velValues;
+        motorsEff_ = effValues;
         jointStatesReceived_ = true;
         lastJointStatesTime_ = Clock::now();
+        if (!jointStatesMappingPrinted_)
+        {
+            jointStatesMappingPrinted_ = true;
+            shouldPrintMapping = true;
+        }
+    }
+
+    if (shouldPrintMapping)
+    {
+        std::cout << "[ROS2] " << topicJointStates_
+                  << " feedback ready: 12/12 joints, position/velocity/effort finite." << std::endl;
+        std::cout << "[ROS2] " << topicJointStates_ << " -> MPC joint mapping:" << std::endl;
+        for (size_t j = 0; j < kJointNamesPinOrder.size(); j++)
+        {
+            std::cout << "  mpc[" << j << "] " << kJointNamesPinOrder[j]
+                      << " <- msg[" << msgIndices[j] << "]" << std::endl;
+        }
     }
 }
 

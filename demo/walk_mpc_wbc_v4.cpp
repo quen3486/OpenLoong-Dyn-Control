@@ -5,7 +5,6 @@
 #include <GLFW/glfw3.h>
 #include "GLFW_callbacks.h"
 #include "MJ_interface_v4.h"
-#include "ROS2_state_pub_v4.h"
 #include "PVT_ctrl_v4.h"
 #include "data_logger.h"
 #include "data_bus.h"
@@ -1177,7 +1176,6 @@ int main(int argc, char **argv)
     JoyStickInterpreter jsInterp(mainCtrlDt);
     DataLogger logger("../record/datalog.log");
     StateEst StateModule(mainCtrlDt);
-    ROS2_StatePub_V4 simRos2StatePub;
     Eigen::Matrix3d mpcInertiaCfg;
     mpcInertiaCfg << controllerConfig.mpcInertiaXx, controllerConfig.mpcInertiaXy, controllerConfig.mpcInertiaXz,
                      controllerConfig.mpcInertiaXy, controllerConfig.mpcInertiaYy, controllerConfig.mpcInertiaYz,
@@ -1236,25 +1234,6 @@ int main(int argc, char **argv)
               << " m, min_clearance=" << weldMinPreApproachClearance
               << " m, hold=" << weldHoldDuration
               << " s, recover=" << weldRecoverDuration << " s" << std::endl;
-
-    bool simRos2StatePubEnabled = controllerConfig.simEnableRos2StatePub;
-    int simRos2PubCount = 0;
-    int simRos2PubDecimation = std::max(1, static_cast<int>(std::lround(controllerConfig.simRosPublishDt / simDt)));
-    if (simRos2StatePubEnabled)
-    {
-        std::string simRosErr;
-        if (!simRos2StatePub.initialize(controllerConfig, &simRosErr))
-        {
-            std::cerr << "[ROS2-Sim] initialization failed: " << simRosErr << std::endl;
-            simRos2StatePubEnabled = false;
-        }
-        else
-        {
-            std::cout << "[ROS2-Sim] enabled, publish_dt=" << simRos2PubDecimation * simDt
-                      << " s, imu_topic=" << controllerConfig.rosTopicImu
-                      << ", joint_topic=" << controllerConfig.rosTopicJointStates << std::endl;
-        }
-    }
 
     // initialize UI: GLFW
     uiController.iniGLFW();
@@ -1860,16 +1839,6 @@ int main(int argc, char **argv)
             }
             mj_interface.updateSensorValues();
             mj_interface.dataBusWrite(RobotState);
-            if (simRos2StatePubEnabled)
-            {
-                simRos2PubCount++;
-                if (simRos2PubCount >= simRos2PubDecimation)
-                {
-                    simRos2StatePub.publishState(RobotState);
-                    simRos2StatePub.spinSome();
-                    simRos2PubCount = 0;
-                }
-            }
             mainCtrlCount++;
             if (mainCtrlCount < mainCtrlDecimation)
             {

@@ -75,7 +75,6 @@ bool loadControllerConfig(const std::string &jsonPath, ControllerConfig &outProf
         return false;
     }
 
-    readOptionalBool(root, "sim_enable_ros2_state_pub", outProfile.simEnableRos2StatePub);
     readOptionalDouble(root, "sim_ros_publish_dt", outProfile.simRosPublishDt);
     readOptionalString(root, "ros_topic_imu", outProfile.rosTopicImu);
     readOptionalString(root, "ros_topic_joint_states", outProfile.rosTopicJointStates);

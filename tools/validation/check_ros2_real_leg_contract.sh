@@ -8,12 +8,10 @@ CFG_FILE="${REPO_ROOT}/common/controller_config_v4_leg.json"
 JOINT_CFG="${REPO_ROOT}/common/joint_ctrl_config_v4_leg.json"
 URDF_FILE="${REPO_ROOT}/models/speedbot_v4/speedbot_v4_leg.urdf"
 ROS_IF="${REPO_ROOT}/sim_interface/ROS2_interface_v4_leg.cpp"
-ROS_STATE_PUB="${REPO_ROOT}/sim_interface/ROS2_state_pub_v4_leg.cpp"
 DEMO_FILE="${REPO_ROOT}/demo/walk_mpc_wbc_leg.cpp"
 START_SCRIPT="${REPO_ROOT}/tools/start_control_v4_leg.sh"
-RVIZ_SCRIPT="${REPO_ROOT}/tools/real_robot/start_rviz_real_leg.sh"
-RVIZ_CFG="${REPO_ROOT}/tools/real_robot/speedbot_v4_leg.rviz"
 REAL_JOINT_STATE_SAMPLE="${REPO_ROOT}/msg"
+ROS_CONTROLLER_FILE="${ROS_CONTROLLER_FILE:-/home/huangkun/workspaces/ros2_ws/src/mit_controller/src/joint_group_mit_controller.cpp}"
 
 pass_count=0
 fail_count=0
@@ -39,6 +37,18 @@ check_no_pattern() {
   local desc="$3"
   if rg -n --no-heading -- "$pattern" "$file" >/tmp/ros2_check_tmp.txt 2>/dev/null; then
     echo "[FAIL] ${desc} ($(head -n 1 /tmp/ros2_check_tmp.txt))"
+    fail_count=$((fail_count + 1))
+  else
+    echo "[PASS] ${desc}"
+    pass_count=$((pass_count + 1))
+  fi
+}
+
+check_path_absent() {
+  local path="$1"
+  local desc="$2"
+  if [[ -e "$path" ]]; then
+    echo "[FAIL] ${desc}: still exists (${path})"
     fail_count=$((fail_count + 1))
   else
     echo "[PASS] ${desc}"
@@ -237,40 +247,13 @@ PY
   fi
 }
 
-check_sim_ros2_state_pub_config() {
-  local desc="v4_leg保留仿真ROS2状态发布开关"
-  if python3 - "$CFG_FILE" <<'PY'
-import json
-import re
-import sys
-
-cfg_path = sys.argv[1]
-with open(cfg_path, "r", encoding="utf-8") as f:
-    text = f.read()
-text = re.sub(r"/\*.*?\*/", "", text, flags=re.S)
-text = re.sub(r"//.*", "", text)
-cfg = json.loads(text)
-value = cfg.get("sim_enable_ros2_state_pub")
-if not isinstance(value, bool):
-    raise SystemExit("sim_enable_ros2_state_pub is missing or not boolean")
-PY
-  then
-    echo "[PASS] ${desc}"
-    pass_count=$((pass_count + 1))
-  else
-    echo "[FAIL] ${desc}"
-    fail_count=$((fail_count + 1))
-  fi
-}
-
 check_real_joint_state_sample() {
   local desc="msg样本joint_states顺序与项目配置一致"
-  if python3 - "$REAL_JOINT_STATE_SAMPLE" "$ROS_STATE_PUB" <<'PY'
-import ast
+  if python3 - "$REAL_JOINT_STATE_SAMPLE" <<'PY'
 import re
 import sys
 
-sample_path, state_pub_path = sys.argv[1:3]
+sample_path = sys.argv[1]
 expected_real_order = [
     "left_hip_roll_joint",
     "left_hip_yaw_joint",
@@ -285,7 +268,6 @@ expected_real_order = [
     "right_hip_pitch_joint",
     "right_ankle_roll_joint",
 ]
-expected_internal_from_real = [0, 1, 2, 5, 4, 7, 3, 9, 6, 10, 8, 11]
 
 def parse_list_block(text, key):
     marker = key + ":\n"
@@ -317,19 +299,6 @@ if len(names) < 12:
 for label, values in (("position", positions), ("velocity", velocities), ("effort", efforts)):
     if len(values) != len(names):
         raise SystemExit(f"{label} length {len(values)} != name length {len(names)}")
-
-with open(state_pub_path, "r", encoding="utf-8") as f:
-    cpp = f.read()
-order_match = re.search(r"kJointNamesRosOrder\s*=\s*\{(.*?)\};", cpp, flags=re.S)
-map_match = re.search(r"kRosToInternalIndex\s*=\s*\{(.*?)\};", cpp, flags=re.S)
-if not order_match or not map_match:
-    raise SystemExit("missing ROS state publisher order arrays")
-cpp_order = re.findall(r'"([^"]+)"', order_match.group(1))
-cpp_map = ast.literal_eval("[" + map_match.group(1).replace("\n", " ") + "]")
-if cpp_order != expected_real_order:
-    raise SystemExit(f"ROS2_StatePub_V4_Leg order mismatch: {cpp_order}")
-if cpp_map != expected_internal_from_real:
-    raise SystemExit(f"ROS2_StatePub_V4_Leg remap mismatch: {cpp_map}")
 PY
   then
     echo "[PASS] ${desc}"
@@ -342,26 +311,44 @@ PY
 
 check_pattern "$CFG_FILE" '"ros_topic_imu"\s*:\s*"/imu/data"' "配置话题: /imu/data"
 check_pattern "$CFG_FILE" '"ros_topic_joint_states"\s*:\s*"/joint_states"' "配置话题: /joint_states"
-check_pattern "$CFG_FILE" '"ros_topic_action_cmd"\s*:\s*"/rl_motion_control_command_with_torque"' "配置话题: /rl_motion_control_command_with_torque"
-check_sim_ros2_state_pub_config
+check_pattern "$CFG_FILE" '"ros_topic_action_cmd"\s*:\s*"/rl_motion_control_command"' "配置话题: /rl_motion_control_command"
+check_no_pattern "$CFG_FILE" 'sim_enable_ros2_state_pub' "配置不再保留MuJoCo ROS2状态发布开关"
 check_real_pvt_torque_scale
 check_pattern "$CFG_FILE" '"contact_confirm_time_sec"\s*:\s*0\.02' "换相接触确认时间: 0.02s"
 check_pattern "$CFG_FILE" '"contact_force_blend_time_sec"\s*:\s*0\.03' "新支撑腿前馈力矩渐入时间: 0.03s"
 
 check_pattern "$START_SCRIPT" 'BIN_NAME="walk_mpc_wbc_leg"' "启动脚本固定leg真机demo"
 check_pattern "$START_SCRIPT" '--ros2-real' "启动脚本通过显式参数进入ros2_real"
-check_pattern "$START_SCRIPT" 'start_rviz_real_leg\.sh' "真机启动固定开启RViz"
-check_no_pattern "$START_SCRIPT" 'CONTROL_MODE|ROBOT_VARIANT|TARGET|START_RVIZ|SIM_ROS_PUBLISH_DT|mujoco_ros2|AUTOWALK' "启动脚本不再提供仿真/机型/AUTOWALK切换"
-check_pattern "$RVIZ_CFG" 'Fixed Frame: base_link' "真机RViz Fixed Frame对齐ref为base_link"
-check_pattern "$RVIZ_SCRIPT" 'cleanup_old_robot_state_publishers' "RViz脚本启动前清理旧robot_state_publisher"
-check_pattern "$RVIZ_SCRIPT" '/tmp/openloong_rviz_urdf\.' "RViz脚本只清理本脚本生成的临时URDF RSP"
-check_pattern "$RVIZ_SCRIPT" 'kill -KILL' "RViz脚本对未退出旧RSP做强制兜底清理"
+check_no_pattern "$START_SCRIPT" 'CONTROL_MODE|ROBOT_VARIANT|TARGET|START_RVIZ|SIM_ROS_PUBLISH_DT|mujoco_ros2|AUTOWALK|rviz|RVIZ|start_rviz|robot_state_publisher' "启动脚本不再启动RViz或仿真可视化"
+check_path_absent "${REPO_ROOT}/tools/real_robot/start_rviz_real_leg.sh" "MPC项目不再保留RViz启动脚本"
+check_path_absent "${REPO_ROOT}/tools/real_robot/speedbot_v4_leg.rviz" "MPC项目不再保留leg RViz配置"
+check_path_absent "${REPO_ROOT}/tools/real_robot/speedbot_v4.rviz" "MPC项目不再保留v4 RViz配置"
+check_path_absent "${REPO_ROOT}/sim_interface/ROS2_state_pub_v4_leg.cpp" "MPC项目不再保留leg仿真状态发布实现"
+check_path_absent "${REPO_ROOT}/sim_interface/ROS2_state_pub_v4.cpp" "MPC项目不再保留v4仿真状态发布实现"
 
 check_pattern "$ROS_IF" 'topicImu_ = config\.rosTopicImu' "ROS2接口读取IMU话题配置"
 check_pattern "$ROS_IF" 'topicJointStates_ = config\.rosTopicJointStates' "ROS2接口读取joint_states话题配置"
 check_pattern "$ROS_IF" 'topicActionCmd_ = config\.rosTopicActionCmd' "ROS2接口读取action_cmd话题配置"
-check_pattern "$ROS_IF" 'msg\.data\.assign\(58, 0\.0\)' "动作发布长度为58(29位置\+29力矩前馈)"
-check_pattern "$ROS_IF" 'msg\.data\[29 \+ i\] = tauFfIn\[i\]' "腿部力矩前馈写入动作后半段"
+check_pattern "$ROS_IF" 'kCommandJointCount = 23' "动作发布关节数为23"
+check_pattern "$ROS_IF" 'kCommandSize == 69' "动作发布长度为69([pos23][vel23][torque23])"
+check_pattern "$ROS_IF" 'msg\.data\.assign\(kCommandSize, 0\.0\)' "动作发布按69长度初始化"
+check_pattern "$ROS_IF" 'msg\.data\[kCommandJointCount \+ i\] = dqDesIn\[i\]' "腿部期望速度写入动作第二段"
+check_pattern "$ROS_IF" 'msg\.data\[2 \* kCommandJointCount \+ i\] = tauFfIn\[i\]' "腿部力矩前馈写入动作第三段"
+
+if [[ -f "$ROS_CONTROLLER_FILE" ]]; then
+  check_pattern "$ROS_CONTROLLER_FILE" 'kControlledJointCount = 23' "mit_controller订阅端固定23关节"
+  check_pattern "$ROS_CONTROLLER_FILE" 'kMotionCommandSize = kControlledJointCount \* kCommandSections' "mit_controller订阅端固定69维命令规模"
+  check_pattern "$ROS_CONTROLLER_FILE" '"/rl_motion_control_command"' "mit_controller订阅统一动作话题"
+  check_pattern "$ROS_CONTROLLER_FILE" 'Float64MultiArray\[69\]=\[pos23\]\[vel23\]\[torque23\]' "mit_controller日志声明69维命令合同"
+  check_pattern "$ROS_CONTROLLER_FILE" 'msg->data\[kControlledJointCount \+ i\]' "mit_controller读取期望速度段"
+  check_pattern "$ROS_CONTROLLER_FILE" 'msg->data\[2 \* kControlledJointCount \+ i\]' "mit_controller读取前馈力矩段"
+  check_pattern "$ROS_CONTROLLER_FILE" 'controller is not in RL_MOTION_CONTROL mode yet' "mit_controller未ready时拒绝MPC命令"
+  check_pattern "$ROS_CONTROLLER_FILE" '"waist_yaw_joint"' "mit_controller合同包含腰关节"
+  check_pattern "$ROS_CONTROLLER_FILE" '"left_shoulder_pitch_joint"' "mit_controller合同包含v4左臂关节"
+  check_pattern "$ROS_CONTROLLER_FILE" '"right_wrist_roll_joint"' "mit_controller合同包含v4右臂末端关节"
+else
+  echo "[SKIP] 未找到mit_controller源码，跳过订阅端静态核对: ${ROS_CONTROLLER_FILE}"
+fi
 
 check_pattern "$ROS_IF" 'busIn\.motors_tor_cur\[i\] = effCopy' "输入力矩来自/joint_states effort"
 check_pattern "$ROS_IF" 'busIn\.basePos\[0\] = 0\.0' "basePos不使用真值"
@@ -378,7 +365,8 @@ fi
 check_pattern "$DEMO_FILE" 'buttonState\.key_g' "真机终端G键发布门控"
 check_pattern "$DEMO_FILE" 'bool publishEnabled = false' "ros2_real默认不发布控制消息"
 check_pattern "$DEMO_FILE" 'stopPublishingForSafety' "安全超限后停发控制消息"
-check_pattern "$DEMO_FILE" 'kp \* \(qDes - qCur\) \+ param\.kd \* \(0\.0 - dqCur\)' "PVT合力矩按PD+前馈估算"
+check_no_pattern "$DEMO_FILE" 'ROS2_StatePub|ROS2_state_pub|sim_enable_ros2_state_pub|simEnableRos2StatePub' "leg demo不再发布MuJoCo ROS2可视化状态"
+check_pattern "$DEMO_FILE" 'kp \* \(qDes - qCur\) \+ param\.kd \* \(dqDes - dqCur\)' "PVT合力矩按PD(含期望速度)+前馈估算"
 check_pattern "$DEMO_FILE" 'closedLoopKp' "真机安全估算读取闭环PVT增益"
 check_pattern "$DEMO_FILE" 'contactConfirmTimeSec = controllerConfig\.contactConfirmTimeSec' "GaitScheduler接入接触确认配置"
 check_pattern "$DEMO_FILE" 'contactForceBlendTimeSec' "换相后新支撑腿力矩渐入配置接入"
@@ -393,7 +381,7 @@ check_order_in_run_ros2_real "$DEMO_FILE" "ros2_real时序: dataBusWrite -> Esti
   'runEstimationAndDynamics\(RobotState, kinDynSolver, StateModule, ctrlTime\)' \
   'applyLegControlStateMachine\(' \
   'runControlPipeline\(' \
-  'ros2Interface\.setMotorsCommand\(RobotState\.motors_pos_des, RobotState\.motors_tor_des\)'
+  'ros2Interface\.setMotorsCommand\(RobotState\.motors_pos_des,'
 
 echo
 if (( fail_count == 0 )); then

@@ -2,15 +2,17 @@
  * walk_mpc_wbc_leg:
  * - "mujoco" backend: MPC + WBC walking demo in MuJoCo.
  * - "ros2_real" backend: MPC + WBC real-robot control via ROS2 topics.
+ * - "sim_real_openloop" mode: MuJoCo feedback/control, plus gated ROS2
+ *   69-value [pos23][vel23][torque23] commands for real-robot open-loop checks.
  *
- * Direct execution runs MuJoCo. Use --ros2-real for the real-robot backend.
+ * Direct execution runs MuJoCo. Use --ros2-real for the real-robot backend,
+ * or --sim-real-openloop to mirror MuJoCo MPC/WBC commands to ROS2 after G.
  */
 #include <mujoco/mujoco.h>
 #include <GLFW/glfw3.h>
 #include "GLFW_callbacks.h"
 #include "MJ_interface_v4_leg.h"
 #include "ROS2_interface_v4_leg.h"
-#include "ROS2_state_pub_v4_leg.h"
 #include "PVT_ctrl_v4_leg.h"
 #include "data_logger.h"
 #include "data_bus.h"
@@ -37,6 +39,7 @@
 #include <fstream>
 #include <sstream>
 #include <vector>
+#include <memory>
 #include <termios.h>
 #include <unistd.h>
 #include <fcntl.h>
@@ -341,6 +344,34 @@ struct EstimatorTruthLog
     }
 };
 
+Eigen::VectorXd fixedSizeLogVector(const Eigen::VectorXd &dataIn, int len)
+{
+    Eigen::VectorXd dataOut = Eigen::VectorXd::Zero(len);
+    if (len <= 0)
+    {
+        return dataOut;
+    }
+
+    const int copyLen = std::min<int>(len, static_cast<int>(dataIn.size()));
+    for (int i = 0; i < copyLen; i++)
+    {
+        if (std::isfinite(dataIn(i)))
+        {
+            dataOut(i) = dataIn(i);
+        }
+    }
+    return dataOut;
+}
+
+void recordFixedEigenLog(DataLogger &logger,
+                         const std::string &name,
+                         const Eigen::VectorXd &dataIn,
+                         int len)
+{
+    const Eigen::VectorXd dataOut = fixedSizeLogVector(dataIn, len);
+    logger.recItermData(name, dataOut);
+}
+
 void addCommonLoggerItems(DataLogger &logger, int robot_nv)
 {
     logger.addIterm("dyn_time", 1);
@@ -371,7 +402,7 @@ void addCommonLoggerItems(DataLogger &logger, int robot_nv)
     logger.addIterm("est_err_pos", 3);
     logger.addIterm("est_err_vel", 3);
     logger.addIterm("est_err_yaw", 1);
-    logger.addIterm("Ufe", 13);
+    logger.addIterm("Ufe", nu);
     logger.addIterm("phi", 1);
     logger.addIterm("phiSwitchMinRuntime", 1);
     logger.addIterm("tSwing", 1);
@@ -443,10 +474,10 @@ void recordCommonLogger(DataLogger &logger,
     logger.recItermData("motors_tor_out", RobotState.motors_tor_out);
     logger.recItermData("motors_vel_cur", RobotState.motors_vel_cur);
     logger.recItermData("motors_vel_des", RobotState.motors_vel_des);
-    logger.recItermData("FL_est", RobotState.FL_est);
-    logger.recItermData("FR_est", RobotState.FR_est);
-    logger.recItermData("wbc_FrRes", RobotState.wbc_FrRes);
-    logger.recItermData("Fr_ff", RobotState.Fr_ff);
+    recordFixedEigenLog(logger, "FL_est", RobotState.FL_est, 3);
+    recordFixedEigenLog(logger, "FR_est", RobotState.FR_est, 3);
+    recordFixedEigenLog(logger, "wbc_FrRes", RobotState.wbc_FrRes, 12);
+    recordFixedEigenLog(logger, "Fr_ff", RobotState.Fr_ff, 12);
     logger.recItermData("base_pos_des", RobotState.base_pos_des);
     logger.recItermData("base_pos", RobotState.base_pos);
     logger.recItermData("base_pos_est", RobotState.base_pos_est);
@@ -463,7 +494,7 @@ void recordCommonLogger(DataLogger &logger,
     logger.recItermData("est_err_pos", estErrPosLog);
     logger.recItermData("est_err_vel", estErrVelLog);
     logger.recItermData("est_err_yaw", truthLog.est_err_yaw);
-    logger.recItermData("Ufe", RobotState.fe_react_tau_cmd);
+    recordFixedEigenLog(logger, "Ufe", RobotState.fe_react_tau_cmd, nu);
     logger.recItermData("phi", RobotState.phi);
     logger.recItermData("phiSwitchMinRuntime", RobotState.phiSwitchMinRuntime);
     logger.recItermData("tSwing", RobotState.tSwing);
@@ -876,16 +907,16 @@ public:
             cmdJumpLimitRad_ = std::max(0.001, tmp);
     }
 
-    void printConfig() const
+    void printConfig(const std::string &tag = "[Safety-Real]", bool printPvtTorqueLimits = true) const
     {
-        std::cout << "[Safety-Real] " << (enabled_ ? "enabled" : "disabled")
+        std::cout << tag << " " << (enabled_ ? "enabled" : "disabled")
                   << ", roll_pitch_limit=" << rollPitchLimitRad_ / kDeg2Rad << " deg"
                   << ", angvel_limit=" << angVelLimitRadS_ << " rad/s"
                   << ", cmd_jump_limit=" << cmdJumpLimitRad_ << " rad"
                   << ", pvt_torque_limit_scale=" << pvtTorqueLimitScale_ << std::endl;
-        if (jointParams_.size() == expectedJointCount_)
+        if (printPvtTorqueLimits && jointParams_.size() == expectedJointCount_)
         {
-            std::cout << "[Safety-Real] PVT torque limits:";
+            std::cout << tag << " PVT torque limits:";
             for (const RealJointSafetyParam &param : jointParams_)
             {
                 std::cout << " " << param.name << "=" << param.maxTorque * pvtTorqueLimitScale_;
@@ -1001,15 +1032,21 @@ public:
     }
 
     bool validateCommandAndRemember(const DataBus &state,
-                                    const std::vector<double> &cmd,
+                                    const std::vector<double> &qDesCmd,
+                                    const std::vector<double> &dqDesCmd,
                                     const std::vector<double> &tauFf,
                                     std::string &reason)
     {
         if (!enabled_)
             return true;
-        if (!isValidCommandVector(cmd))
+        if (!isValidCommandVector(qDesCmd))
         {
-            reason = "command vector invalid: size/nonfinite/range";
+            reason = "position command vector invalid: size/nonfinite";
+            return false;
+        }
+        if (!isValidCommandVector(dqDesCmd))
+        {
+            reason = "velocity command vector invalid: size/nonfinite";
             return false;
         }
         if (tauFf.size() < expectedJointCount_ || !isFiniteVector(tauFf))
@@ -1030,7 +1067,8 @@ public:
             const RealJointSafetyParam &param = jointParams_[i];
             const double qCur = state.motors_pos_cur[i];
             const double dqCur = state.motors_vel_cur[i];
-            const double qDes = cmd[i];
+            const double qDes = qDesCmd[i];
+            const double dqDes = dqDesCmd[i];
             const double tauFfVal = tauFf[i];
             if (qDes < param.minPos || qDes > param.maxPos)
             {
@@ -1041,8 +1079,17 @@ public:
                 reason = oss.str();
                 return false;
             }
+            if (std::fabs(dqDes) > param.maxSpeed)
+            {
+                std::ostringstream oss;
+                oss << "joint command velocity over limit: " << param.name
+                    << ", dq_des=" << dqDes
+                    << ", limit=" << param.maxSpeed;
+                reason = oss.str();
+                return false;
+            }
 
-            const double tauPd = param.kp * (qDes - qCur) + param.kd * (0.0 - dqCur);
+            const double tauPd = param.kp * (qDes - qCur) + param.kd * (dqDes - dqCur);
             const double tauEst = tauPd + tauFfVal;
             const double tauLimit = param.maxTorque * pvtTorqueLimitScale_;
             if (std::fabs(tauEst) > tauLimit)
@@ -1052,6 +1099,7 @@ public:
                     << ", q_cur=" << qCur
                     << ", q_des=" << qDes
                     << ", dq_cur=" << dqCur
+                    << ", dq_des=" << dqDes
                     << ", tau_pd=" << tauPd
                     << ", tau_ff=" << tauFfVal
                     << ", tau_est=" << tauEst
@@ -1064,7 +1112,7 @@ public:
         {
             double maxJump = 0.0;
             for (size_t i = 0; i < expectedJointCount_; i++)
-                maxJump = std::max(maxJump, std::fabs(cmd[i] - lastCommand_[i]));
+                maxJump = std::max(maxJump, std::fabs(qDesCmd[i] - lastCommand_[i]));
             if (maxJump > cmdJumpLimitRad_)
             {
                 std::ostringstream oss;
@@ -1073,7 +1121,7 @@ public:
                 return false;
             }
         }
-        lastCommand_.assign(cmd.begin(), cmd.begin() + expectedJointCount_);
+        lastCommand_.assign(qDesCmd.begin(), qDesCmd.begin() + expectedJointCount_);
         hasLastCommand_ = true;
         return true;
     }
@@ -1109,6 +1157,29 @@ private:
 
 };
 
+const char *motionStateName(DataBus::MotionState state)
+{
+    switch (state)
+    {
+    case DataBus::Stand:
+        return "Stand";
+    case DataBus::Walk:
+        return "Walk";
+    case DataBus::Walk2Stand:
+        return "Walk2Stand";
+    case DataBus::WeldPrepare:
+        return "WeldPrepare";
+    case DataBus::Weld:
+        return "Weld";
+    case DataBus::WeldHold:
+        return "WeldHold";
+    case DataBus::WeldRecover:
+        return "WeldRecover";
+    default:
+        return "Unknown";
+    }
+}
+
 void applyLegControlStateMachine(const ControllerConfig &controllerConfig,
                                  const UIctr::ButtonState &buttonState,
                                  DataBus &RobotState,
@@ -1125,6 +1196,10 @@ void applyLegControlStateMachine(const ControllerConfig &controllerConfig,
                                  double turnRateCmd,
                                  double ctrlTime)
 {
+    const bool anyMotionKey = buttonState.key_space || buttonState.key_w || buttonState.key_s ||
+                              buttonState.key_a || buttonState.key_d || buttonState.key_h ||
+                              buttonState.key_j || buttonState.key_q || buttonState.key_e;
+
     if (buttonState.key_f && openLoopPhaseActive)
     {
         openLoopPhaseActive = false;
@@ -1134,6 +1209,12 @@ void applyLegControlStateMachine(const ControllerConfig &controllerConfig,
         jsInterp.setVyDesLPara(0.0, controllerConfig.vxStopRampTime);
         jsInterp.setWzDesLPara(0.0, controllerConfig.wzStopRampTime);
         std::cout << "[OpenLoop] closed-loop enabled at t=" << ctrlTime << " s" << std::endl;
+    }
+    else if (buttonState.key_f)
+    {
+        std::cout << "[Key] F ignored: closed-loop already active, motionState="
+                  << motionStateName(RobotState.motionState)
+                  << ", t=" << ctrlTime << " s" << std::endl;
     }
 
     if (!openLoopPhaseActive)
@@ -1153,70 +1234,138 @@ void applyLegControlStateMachine(const ControllerConfig &controllerConfig,
             gaitScheduler.start();
             jsInterp.setIniPos(RobotState.q(0), RobotState.q(1), RobotState.base_rpy(2));
             RobotState.motionState = DataBus::Walk;
+            std::cout << "[Key] Space: Stand -> Walk at t=" << ctrlTime << " s" << std::endl;
         }
         else if (buttonState.key_space && RobotState.motionState == DataBus::Walk && std::fabs(jsInterp.vxLGen.y) < 0.01)
         {
             RobotState.motionState = DataBus::Walk2Stand;
             jsInterp.setIniPos(RobotState.q(0), RobotState.q(1), RobotState.base_rpy(2));
+            std::cout << "[Key] Space: Walk -> Walk2Stand at t=" << ctrlTime << " s" << std::endl;
+        }
+        else if (buttonState.key_space)
+        {
+            std::cout << "[Key] Space ignored: motionState=" << motionStateName(RobotState.motionState)
+                      << ", vx_now=" << jsInterp.vxLGen.y
+                      << ", t=" << ctrlTime << " s" << std::endl;
         }
 
         if (buttonState.key_a && RobotState.motionState != DataBus::Stand)
         {
             if (jsInterp.wzLGen.yDes < 0)
+            {
                 jsInterp.setWzDesLPara(0, controllerConfig.wzStopRampTime);
+                std::cout << "[Key] A: cancel right turn, wz_des=0 at t=" << ctrlTime << " s" << std::endl;
+            }
             else
+            {
                 jsInterp.setWzDesLPara(turnRateCmd, controllerConfig.wzRampTime);
+                std::cout << "[Key] A: turn left, wz_des=" << turnRateCmd
+                          << " rad/s at t=" << ctrlTime << " s" << std::endl;
+            }
+        }
+        else if (buttonState.key_a)
+        {
+            std::cout << "[Key] A ignored: robot is Stand at t=" << ctrlTime << " s" << std::endl;
         }
         if (buttonState.key_d && RobotState.motionState != DataBus::Stand)
         {
             if (jsInterp.wzLGen.yDes > 0)
+            {
                 jsInterp.setWzDesLPara(0, controllerConfig.wzStopRampTime);
+                std::cout << "[Key] D: cancel left turn, wz_des=0 at t=" << ctrlTime << " s" << std::endl;
+            }
             else
+            {
                 jsInterp.setWzDesLPara(-turnRateCmd, controllerConfig.wzRampTime);
+                std::cout << "[Key] D: turn right, wz_des=" << -turnRateCmd
+                          << " rad/s at t=" << ctrlTime << " s" << std::endl;
+            }
+        }
+        else if (buttonState.key_d)
+        {
+            std::cout << "[Key] D ignored: robot is Stand at t=" << ctrlTime << " s" << std::endl;
         }
 
         if (buttonState.key_w && RobotState.motionState != DataBus::Stand)
+        {
             jsInterp.setVxDesLPara(xv_des, controllerConfig.vxRampTime);
+            std::cout << "[Key] W: forward vx_des=" << xv_des
+                      << " m/s at t=" << ctrlTime << " s" << std::endl;
+        }
+        else if (buttonState.key_w)
+        {
+            std::cout << "[Key] W ignored: robot is Stand at t=" << ctrlTime << " s" << std::endl;
+        }
 
         if (buttonState.key_s && RobotState.motionState != DataBus::Stand)
+        {
             jsInterp.setVxDesLPara(-std::fabs(xv_des), controllerConfig.vxRampTime);
+            std::cout << "[Key] S: backward vx_des=" << -std::fabs(xv_des)
+                      << " m/s at t=" << ctrlTime << " s" << std::endl;
+        }
+        else if (buttonState.key_s)
+        {
+            std::cout << "[Key] S ignored: robot is Stand at t=" << ctrlTime << " s" << std::endl;
+        }
 
         if (buttonState.key_j && RobotState.motionState != DataBus::Stand)
         {
             jsInterp.setVxDesLPara(0, controllerConfig.vxStopRampTime);
             jsInterp.setWzDesLPara(0, controllerConfig.wzStopRampTime);
+            std::cout << "[Key] J: stop command, vx_des=0, wz_des=0";
             if (RobotState.motionState == DataBus::Walk)
             {
                 RobotState.motionState = DataBus::Walk2Stand;
                 jsInterp.setIniPos(RobotState.q(0), RobotState.q(1), RobotState.base_rpy(2));
+                std::cout << ", Walk -> Walk2Stand";
             }
+            std::cout << " at t=" << ctrlTime << " s" << std::endl;
+        }
+        else if (buttonState.key_j)
+        {
+            std::cout << "[Key] J ignored: robot is Stand at t=" << ctrlTime << " s" << std::endl;
         }
 
         if (buttonState.key_e)
         {
+            const double oldSpeed = xv_des;
             xv_des = std::min(std::round((xv_des + xv_step) * 10.0) / 10.0, xv_max);
+            std::cout << "[Key] E: speed up " << oldSpeed << " -> " << xv_des << " m/s";
             if (RobotState.motionState != DataBus::Stand && std::fabs(jsInterp.vxLGen.yDes) > 1e-3)
             {
                 const double dir = (jsInterp.vxLGen.yDes >= 0.0) ? 1.0 : -1.0;
                 jsInterp.setVxDesLPara(dir * xv_des, controllerConfig.speedUpdateRampTime);
+                std::cout << ", applied vx_des=" << dir * xv_des;
             }
+            std::cout << " at t=" << ctrlTime << " s" << std::endl;
         }
 
         if (buttonState.key_q)
         {
+            const double oldSpeed = xv_des;
             xv_des = std::max(std::round((xv_des - xv_step) * 10.0) / 10.0, xv_min);
+            std::cout << "[Key] Q: speed down " << oldSpeed << " -> " << xv_des << " m/s";
             if (RobotState.motionState != DataBus::Stand && std::fabs(jsInterp.vxLGen.yDes) > 1e-3)
             {
                 const double dir = (jsInterp.vxLGen.yDes >= 0.0) ? 1.0 : -1.0;
                 jsInterp.setVxDesLPara(dir * xv_des, controllerConfig.speedUpdateRampTime);
+                std::cout << ", applied vx_des=" << dir * xv_des;
             }
+            std::cout << " at t=" << ctrlTime << " s" << std::endl;
         }
 
         if (buttonState.key_h)
         {
             jsInterp.setIniPos(RobotState.q(0), RobotState.q(1), RobotState.base_rpy(2));
             jsInterp.setWzDesLPara(0, controllerConfig.headingResetRampTime);
+            std::cout << "[Key] H: reset heading reference, yaw=" << RobotState.base_rpy(2)
+                      << " rad at t=" << ctrlTime << " s" << std::endl;
         }
+    }
+    else if (anyMotionKey)
+    {
+        std::cout << "[Key] command ignored while open-loop stand is active. Press F first. t="
+                  << ctrlTime << " s" << std::endl;
     }
 
     if (RobotState.motionState == DataBus::Walk2Stand || openLoopPhaseActive)
@@ -1371,7 +1520,7 @@ void runControlPipeline(const ControllerConfig &controllerConfig,
     }
 }
 
-int runMujoco(const ControllerConfig &controllerConfig)
+int runMujoco(const ControllerConfig &controllerConfig, bool simRealOpenloopRequested)
 {
     char error[1000] = "Could not load binary model";
     mjModel *mj_model = mj_loadXML("../models/scene_v4_leg.xml", 0, error, 1000);
@@ -1391,7 +1540,7 @@ int runMujoco(const ControllerConfig &controllerConfig)
     const double mainCtrlDt = simDt * mainCtrlDecimation;
     const int mpcCtrlDecimation = std::max(1, static_cast<int>(std::lround(controllerConfig.mpcControlDt / mainCtrlDt)));
     const double mpcCtrlDt = mainCtrlDt * mpcCtrlDecimation;
-    std::cout << "[Backend] mujoco" << std::endl;
+    std::cout << "[Backend] mujoco" << (simRealOpenloopRequested ? " + sim_real_openloop" : "") << std::endl;
     std::cout << "[LoopRate] sim=" << 1.0 / simDt << " Hz, main=" << 1.0 / mainCtrlDt
               << " Hz, mpc=" << 1.0 / mpcCtrlDt << " Hz" << std::endl;
 
@@ -1407,27 +1556,50 @@ int runMujoco(const ControllerConfig &controllerConfig)
                                                 controllerConfig.contactForceBlendTimeSec);
     DataLogger logger("../record/datalog.log");
     StateEst StateModule(mainCtrlDt);
-    ROS2_StatePub_V4_Leg simRos2StatePub;
+    ROS2_Interface_V4_Leg simRealCommandPub;
+    std::unique_ptr<RealSafetyMonitor> simRealCommandSafety;
 
     configureMpcFromControllerConfig(controllerConfig, MPC_solv, WBC_solv);
 
-    bool simRos2StatePubEnabled = controllerConfig.simEnableRos2StatePub;
-    int simRos2PubCount = 0;
-    int simRos2PubDecimation = std::max(1, static_cast<int>(std::lround(controllerConfig.simRosPublishDt / simDt)));
-    if (simRos2StatePubEnabled)
+    bool simRealOpenloopEnabled = false;
+    bool simRealCommandPublishEnabled = false;
+    bool simRealCommandSafetyStopped = false;
+    int simRealCommandPubCount = 0;
+    const int simRealCommandPubDecimation = std::max(1, static_cast<int>(std::lround(controllerConfig.simRosPublishDt / mainCtrlDt)));
+    std::vector<double> simRealLastPublishedPos;
+    std::vector<double> simRealLastPublishedVel;
+    std::vector<double> simRealLastPublishedTau;
+    std::vector<double> simRealRampStartPos(12, 0.0);
+    std::vector<double> simRealRampStartVel(12, 0.0);
+    std::vector<double> simRealRampStartTau(12, 0.0);
+    double simRealRampElapsed = 0.0;
+    if (simRealOpenloopRequested)
     {
-        std::string simRosErr;
-        if (!simRos2StatePub.initialize(controllerConfig, &simRosErr))
+        std::string simRealRosErr;
+        if (!simRealCommandPub.initializeCommandPublisherOnly(controllerConfig, &simRealRosErr))
         {
-            std::cerr << "[ROS2-Sim] initialization failed: " << simRosErr << std::endl;
-            simRos2StatePubEnabled = false;
+            std::cerr << "[ROS2-OpenLoop] command publisher initialization failed: " << simRealRosErr << std::endl;
+            return 1;
         }
-        else
+
+        std::vector<RealJointSafetyParam> simRealJointSafetyParams;
+        std::string simRealJointSafetyPath;
+        std::string simRealJointSafetyErr;
+        if (!loadRealJointSafetyParams(simRealJointSafetyParams, simRealJointSafetyPath, simRealJointSafetyErr))
         {
-            std::cout << "[ROS2-Sim] enabled, publish_dt=" << simRos2PubDecimation * simDt
-                      << " s, imu_topic=" << controllerConfig.rosTopicImu
-                      << ", joint_topic=" << controllerConfig.rosTopicJointStates << std::endl;
+            std::cerr << "[Safety-SimOpenLoop] failed to load joint safety config: " << simRealJointSafetyErr << std::endl;
+            return 1;
         }
+
+        simRealCommandSafety = std::make_unique<RealSafetyMonitor>(controllerConfig, simRealJointSafetyParams);
+        std::cout << "[Safety-SimOpenLoop] joint limits loaded: " << simRealJointSafetyPath << std::endl;
+        simRealCommandSafety->printConfig("[Safety-SimOpenLoop]", false);
+        simRealOpenloopEnabled = true;
+        simRealCommandPubCount = simRealCommandPubDecimation - 1;
+        std::cout << "[ROS2-OpenLoop] ready, publish_dt=" << simRealCommandPubDecimation * mainCtrlDt
+                  << " s, action_topic=" << controllerConfig.rosTopicActionCmd << std::endl;
+        std::cout << "[Command-SimOpenLoop] temporary publish mode: publishes 69-value command; non-leg joints use default/zero." << std::endl;
+        std::cout << "[PublishGate-SimOpenLoop] startup publishes nothing. Press G to start/stop real command publishing." << std::endl;
     }
 
     const bool headlessMode = std::getenv("HEADLESS") != nullptr;
@@ -1439,6 +1611,10 @@ int runMujoco(const ControllerConfig &controllerConfig)
     }
     UIctr::ButtonState buttonState;
     std::cout << "[OpenLoop] press F to enable closed-loop walk control." << std::endl;
+    if (simRealOpenloopEnabled)
+    {
+        std::cout << "[Key-SimOpenLoop] G(publish real command on/off) F(sim closed-loop) Space(stand/walk) W/S/A/D(move) Q/E(speed) J(stop) H(reset yaw)" << std::endl;
+    }
 
     double stand_legLength = 0.95;
     double foot_height = 0.053;
@@ -1496,13 +1672,82 @@ int runMujoco(const ControllerConfig &controllerConfig)
     std::vector<double> truthJointTor;
 
     bool openLoopPhaseActive = true;
-    double simEndTime = regressionScript.enabled ? regressionScript.simEndTime : 200.0;
+    const bool finiteSimDuration = headlessMode || regressionScript.enabled;
+    const double simEndTime = regressionScript.enabled ? regressionScript.simEndTime : 200.0;
+    if (finiteSimDuration)
+    {
+        std::cout << "[MuJoCo] finite run enabled, sim_end_t=" << simEndTime
+                  << " s, reason=" << (regressionScript.enabled ? "regression" : "headless") << std::endl;
+    }
+    else
+    {
+        std::cout << "[MuJoCo] interactive run has no fixed simulation time limit." << std::endl;
+    }
 
     mjtNum simstart = mj_data->time;
     double simTime = mj_data->time;
+    std::string mujocoExitReason = "unknown";
 
-    while (headlessMode ? (simTime < simEndTime) : (!glfwWindowShouldClose(uiController.window)))
+    auto stopSimRealPublishingForSafety = [&](const std::string &reason)
     {
+        if (!simRealCommandSafetyStopped)
+        {
+            std::cerr << "[Safety-SimOpenLoop] stopped real command publishing: " << reason << std::endl;
+            std::cerr << "[Safety-SimOpenLoop] restart the demo after checking the robot side." << std::endl;
+        }
+        simRealCommandSafetyStopped = true;
+        simRealCommandPublishEnabled = false;
+        if (simRealCommandSafety)
+        {
+            simRealCommandSafety->resetCommandHistory();
+        }
+    };
+
+    auto extractSimRealTargetCommand = [&](std::vector<double> &targetPos,
+                                           std::vector<double> &targetVel,
+                                           std::vector<double> &targetTau,
+                                           std::string &reason) -> bool
+    {
+        auto checkFirst12Finite = [](const std::vector<double> &values)
+        {
+            if (values.size() < 12)
+            {
+                return false;
+            }
+            for (size_t i = 0; i < 12; i++)
+            {
+                if (!std::isfinite(values[i]))
+                {
+                    return false;
+                }
+            }
+            return true;
+        };
+
+        if (!checkFirst12Finite(RobotState.motors_pos_des))
+        {
+            reason = "motors_pos_des invalid: fewer than 12 values or contains NaN/Inf";
+            return false;
+        }
+        targetPos.assign(RobotState.motors_pos_des.begin(), RobotState.motors_pos_des.begin() + 12);
+        targetVel.assign(12, 0.0);
+        targetTau.assign(12, 0.0);
+        return true;
+    };
+
+    while (true)
+    {
+        if (!headlessMode && glfwWindowShouldClose(uiController.window))
+        {
+            mujocoExitReason = "window closed";
+            break;
+        }
+        if (finiteSimDuration && simTime >= simEndTime)
+        {
+            mujocoExitReason = regressionScript.enabled ? "regression sim_end reached" : "headless sim_end reached";
+            break;
+        }
+
         simstart = mj_data->time;
         while (mj_data->time - simstart < 1.0 / 60.0 && (headlessMode || uiController.runSim))
         {
@@ -1510,16 +1755,6 @@ int runMujoco(const ControllerConfig &controllerConfig)
             simTime = mj_data->time;
             mj_interface.updateSensorValues();
             mj_interface.dataBusWrite(RobotState);
-            if (simRos2StatePubEnabled)
-            {
-                simRos2PubCount++;
-                if (simRos2PubCount >= simRos2PubDecimation)
-                {
-                    simRos2StatePub.publishState(RobotState);
-                    simRos2StatePub.spinSome();
-                    simRos2PubCount = 0;
-                }
-            }
 
             mainCtrlCount++;
             if (mainCtrlCount < mainCtrlDecimation)
@@ -1537,6 +1772,50 @@ int runMujoco(const ControllerConfig &controllerConfig)
 
             buttonState = uiController.getButtonState();
             regressionScript.inject(simTime, buttonState);
+            if (simRealOpenloopEnabled && buttonState.key_g)
+            {
+                if (simRealCommandSafetyStopped)
+                {
+                    std::cerr << "[PublishGate-SimOpenLoop] G ignored after safety stop. Please restart manually." << std::endl;
+                }
+                else if (simRealCommandPublishEnabled)
+                {
+                    simRealCommandPublishEnabled = false;
+                    if (simRealCommandSafety)
+                    {
+                        simRealCommandSafety->resetCommandHistory();
+                    }
+                    std::cout << "[PublishGate-SimOpenLoop] real command publishing stopped by G, topic="
+                              << controllerConfig.rosTopicActionCmd << std::endl;
+                }
+                else
+                {
+                    simRealRampStartPos.assign(12, 0.0);
+                    simRealRampStartVel.assign(12, 0.0);
+                    simRealRampStartTau.assign(12, 0.0);
+                    const bool hasLastLegCommand = simRealLastPublishedPos.size() == 12 &&
+                                                   simRealLastPublishedVel.size() == 12 &&
+                                                   simRealLastPublishedTau.size() == 12;
+                    if (hasLastLegCommand)
+                    {
+                        simRealRampStartPos = simRealLastPublishedPos;
+                        simRealRampStartVel = simRealLastPublishedVel;
+                        simRealRampStartTau = simRealLastPublishedTau;
+                    }
+                    simRealRampElapsed = 0.0;
+                    simRealCommandPubCount = simRealCommandPubDecimation - 1;
+                    simRealCommandPublishEnabled = true;
+                    if (simRealCommandSafety)
+                    {
+                        simRealCommandSafety->resetCommandHistory();
+                    }
+                    std::cout << "[PublishGate-SimOpenLoop] real command publishing enabled by G, topic="
+                              << controllerConfig.rosTopicActionCmd
+                              << ", ramp_start="
+                              << (hasLastLegCommand ? "last leg command" : "zero command")
+                              << ", ramp_time=" << controllerConfig.autoStartRampTime << " s" << std::endl;
+                }
+            }
             applyLegControlStateMachine(controllerConfig, buttonState, RobotState, jsInterp, gaitScheduler,
                                         openLoopPhaseActive, autoWalkEnabled, autoWalkStarted, autoWalkSpeed,
                                         xv_des, xv_step, xv_max, xv_min, turnRateCmd, simTime);
@@ -1547,6 +1826,65 @@ int runMujoco(const ControllerConfig &controllerConfig)
                                mpcCtrlCount, mpcCtrlDecimation,
                                true, openLoopPhaseActive);
             commandBlender.apply(RobotState, mainCtrlDt, !openLoopPhaseActive);
+
+            if (simRealOpenloopEnabled && simRealCommandPublishEnabled)
+            {
+                std::vector<double> targetPos;
+                std::vector<double> targetVel;
+                std::vector<double> targetTau;
+                std::string safetyReason;
+                if (!extractSimRealTargetCommand(targetPos, targetVel, targetTau, safetyReason))
+                {
+                    stopSimRealPublishingForSafety(safetyReason);
+                }
+                else
+                {
+                    std::vector<double> publishPos = targetPos;
+                    std::vector<double> publishVel = targetVel;
+                    std::vector<double> publishTau = targetTau;
+                    const double rampTime = std::max(controllerConfig.autoStartRampTime, mainCtrlDt);
+                    if (simRealRampElapsed < rampTime)
+                    {
+                        const double ratio = std::clamp(simRealRampElapsed / rampTime, 0.0, 1.0);
+                        const double alpha = ratio * ratio * (3.0 - 2.0 * ratio);
+                        for (size_t i = 0; i < 12; i++)
+                        {
+                            publishPos[i] = (1.0 - alpha) * simRealRampStartPos[i] + alpha * targetPos[i];
+                            publishVel[i] = (1.0 - alpha) * simRealRampStartVel[i] + alpha * targetVel[i];
+                            publishTau[i] = (1.0 - alpha) * simRealRampStartTau[i] + alpha * targetTau[i];
+                        }
+                        simRealRampElapsed += mainCtrlDt;
+                    }
+
+                    simRealCommandPubCount++;
+                    if (simRealCommandPubCount >= simRealCommandPubDecimation)
+                    {
+                        if (simRealCommandSafety == nullptr)
+                        {
+                            safetyReason = "safety monitor unavailable";
+                            stopSimRealPublishingForSafety(safetyReason);
+                        }
+                        else if (!simRealCommandSafety->validateCommandAndRemember(RobotState,
+                                                                                   publishPos,
+                                                                                   publishVel,
+                                                                                   publishTau,
+                                                                                   safetyReason))
+                        {
+                            stopSimRealPublishingForSafety(safetyReason);
+                        }
+                        else
+                        {
+                            simRealCommandPub.setMotorsCommand(publishPos, publishVel, publishTau);
+                            simRealCommandPub.spinSome();
+                            simRealLastPublishedPos = publishPos;
+                            simRealLastPublishedVel = publishVel;
+                            simRealLastPublishedTau = publishTau;
+                        }
+                        simRealCommandPubCount = 0;
+                    }
+                }
+            }
+
             truthLog.update(RobotState, truthBasePosW, truthBaseVelW, truthRpyW);
             truthLog.setMujocoTouchForces(mj_interface.f3d[2][0], mj_interface.f3d[2][1]);
 
@@ -1567,13 +1905,17 @@ int runMujoco(const ControllerConfig &controllerConfig)
             recordCommonLogger(logger, RobotState, simTime, mainCtrlDt, mpcCtrlDt, truthLog);
         }
 
-        if (mj_data->time >= simEndTime)
+        if (finiteSimDuration && simTime >= simEndTime)
+        {
+            mujocoExitReason = regressionScript.enabled ? "regression sim_end reached" : "headless sim_end reached";
             break;
+        }
 
         if (!headlessMode)
             uiController.updateScene();
     }
 
+    std::cout << "[MuJoCo] exit: " << mujocoExitReason << " at t=" << simTime << " s" << std::endl;
     if (!headlessMode)
         uiController.Close();
     return 0;
@@ -1658,8 +2000,11 @@ int runRos2Real(const ControllerConfig &controllerConfig)
     const double xv_max = controllerConfig.speedMax;
     const double xv_min = controllerConfig.speedMin;
     const double turnRateCmd = controllerConfig.turnRateCmd;
+    const std::vector<double> zeroVelCmd(12, 0.0);
+    const std::vector<double> zeroTauCmd(12, 0.0);
     std::cout << "[PublishGate-Real] startup is subscribe-only. Press G to start/stop control publishing." << std::endl;
     std::cout << "[OpenLoop-Real] after G starts publishing, press F to enable closed-loop stand control." << std::endl;
+    std::cout << "[Command-Real] temporary publish mode: publishes 69-value command; non-leg joints use default/zero." << std::endl;
     std::cout << "[Key-Real] G(publish on/off) F(closed-loop) Space(stand/walk) W/S/A/D(move) Q/E(speed) J(stop) H(reset yaw)" << std::endl;
 
     TerminalKeyReader terminalKeyReader;
@@ -1794,7 +2139,8 @@ int runRos2Real(const ControllerConfig &controllerConfig)
 
         if (!safetyMonitor.validateCommandAndRemember(RobotState,
                                                       RobotState.motors_pos_des,
-                                                      RobotState.motors_tor_des,
+                                                      zeroVelCmd,
+                                                      zeroTauCmd,
                                                       safetyReason))
         {
             stopPublishingForSafety(safetyReason);
@@ -1803,7 +2149,9 @@ int runRos2Real(const ControllerConfig &controllerConfig)
             continue;
         }
 
-        ros2Interface.setMotorsCommand(RobotState.motors_pos_des, RobotState.motors_tor_des);
+        ros2Interface.setMotorsCommand(RobotState.motors_pos_des,
+                                       zeroVelCmd,
+                                       zeroTauCmd);
         recordCommonLogger(logger, RobotState, ctrlTime, mainCtrlDt, mainCtrlDt * mpcCtrlDecimation, truthLog);
 
         std::this_thread::sleep_until(nextTick);
@@ -1841,10 +2189,10 @@ int main(int argc, char **argv)
     }
 
     const bool useRos2Real = hasArg(argc, argv, "--ros2-real");
+    const bool useSimRealOpenloop = hasArg(argc, argv, "--sim-real-openloop");
     if (useRos2Real)
     {
-        controllerConfig.simEnableRos2StatePub = false;
         return runRos2Real(controllerConfig);
     }
-    return runMujoco(controllerConfig);
+    return runMujoco(controllerConfig, useSimRealOpenloop);
 }

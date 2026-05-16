@@ -1,7 +1,6 @@
 {
   // ===== ROS2接口（仿真发布/可视化） =====
-  "sim_enable_ros2_state_pub": false,      // MuJoCo是否发布ROS2状态
-  "sim_ros_publish_dt": 0.01,              // 仿真ROS2状态发布周期(s)
+  "sim_ros_publish_dt": 0.01,              // 仿真真机开环命令发布周期(s)
   "ros_topic_imu": "/imu/data",            // IMU姿态话题
   "ros_topic_joint_states": "/joint_states", // 关节状态话题
 

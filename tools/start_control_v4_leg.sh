@@ -8,9 +8,6 @@ BUILD_DIR="${REPO_ROOT}/build"
 BIN_NAME="walk_mpc_wbc_leg"
 BIN_PATH="${BUILD_DIR}/${BIN_NAME}"
 CFG_PATH="${REPO_ROOT}/common/controller_config_v4_leg.json"
-RVIZ_SCRIPT="${REPO_ROOT}/tools/real_robot/start_rviz_real_leg.sh"
-RVIZ_CFG_PATH="${REPO_ROOT}/tools/real_robot/speedbot_v4_leg.rviz"
-RVIZ_URDF_PATH="${REPO_ROOT}/models/speedbot_v4/speedbot_v4_leg.urdf"
 
 if ! command -v ros2 >/dev/null 2>&1; then
   if [ -f /opt/ros/humble/setup.bash ]; then
@@ -35,32 +32,12 @@ if [ ! -f "${CFG_PATH}" ]; then
   exit 1
 fi
 
-if [ ! -x "${RVIZ_SCRIPT}" ]; then
-  echo "[ERROR] RViz script not found: ${RVIZ_SCRIPT}"
-  exit 1
-fi
-
 echo "[Control] mode   : ros2_real"
 echo "[Control] variant: leg"
 echo "[Control] binary : ${BIN_PATH}"
 echo "[Control] config : ${CFG_PATH}"
-echo "[Control] rviz   : ${RVIZ_CFG_PATH}"
-echo "[Control] urdf   : ${RVIZ_URDF_PATH}"
-echo "[Control] real   : fixed leg + RViz; press G in the controller terminal to publish"
-
-RVIZ_PID=""
-cleanup() {
-  if [ -n "${RVIZ_PID}" ] && kill -0 "${RVIZ_PID}" >/dev/null 2>&1; then
-    kill "${RVIZ_PID}" >/dev/null 2>&1 || true
-    wait "${RVIZ_PID}" 2>/dev/null || true
-  fi
-}
-trap cleanup EXIT INT TERM
-
-RVIZ_CONFIG="${RVIZ_CFG_PATH}" \
-ROBOT_URDF="${RVIZ_URDF_PATH}" \
-"${RVIZ_SCRIPT}" &
-RVIZ_PID=$!
+echo "[Control] real   : fixed leg control only; visualization is provided by the controller workspace."
+echo "[Control] gate   : press G in this terminal to publish control commands"
 
 cd "${BUILD_DIR}"
 

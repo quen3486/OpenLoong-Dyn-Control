@@ -39,7 +39,7 @@ static void keyboard(GLFWwindow* window, int key, int scancode, int act, int mod
 
 static void window_close_callback(GLFWwindow* window)
 {
-    ((UIctr*)(glfwGetWindowUserPointer(window)))->Close();
+    glfwSetWindowShouldClose(window, GLFW_TRUE);
 }
 
 void UIctr::iniGLFW() {
