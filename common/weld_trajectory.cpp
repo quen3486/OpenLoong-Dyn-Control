@@ -128,16 +128,8 @@ bool WeldTrajectory::loadCsv(const std::string &path, std::string *errMsg)
         return false;
     }
 
-    double startTime = 0.0;
-    totalLength_ = 0.0;
-    for (auto &seg : loaded)
-    {
-        seg.startTime = startTime;
-        startTime += seg.duration;
-        totalLength_ += seg.length;
-    }
-    totalDuration_ = startTime;
     segments_ = std::move(loaded);
+    recomputeTiming();
     path_ = path;
 
     if (errMsg != nullptr)
@@ -145,6 +137,64 @@ bool WeldTrajectory::loadCsv(const std::string &path, std::string *errMsg)
         errMsg->clear();
     }
     return true;
+}
+
+bool WeldTrajectory::scalePathLength(double targetLength, std::string *errMsg)
+{
+    if (segments_.empty())
+    {
+        if (errMsg != nullptr)
+        {
+            *errMsg = "cannot scale empty weld trajectory";
+        }
+        return false;
+    }
+    if (targetLength <= 1.0e-8 || !std::isfinite(targetLength))
+    {
+        if (errMsg != nullptr)
+        {
+            *errMsg = "target weld length must be positive";
+        }
+        return false;
+    }
+    if (totalLength_ <= 1.0e-8 || !std::isfinite(totalLength_))
+    {
+        if (errMsg != nullptr)
+        {
+            *errMsg = "loaded weld trajectory has invalid length";
+        }
+        return false;
+    }
+
+    const double scale = targetLength / totalLength_;
+    const Eigen::Vector3d center = 0.5 * (segments_.front().start.pos + segments_.back().end.pos);
+    for (auto &seg : segments_)
+    {
+        seg.start.pos = center + scale * (seg.start.pos - center);
+        seg.end.pos = center + scale * (seg.end.pos - center);
+    }
+    recomputeTiming();
+
+    if (errMsg != nullptr)
+    {
+        errMsg->clear();
+    }
+    return true;
+}
+
+void WeldTrajectory::recomputeTiming()
+{
+    double startTime = 0.0;
+    totalLength_ = 0.0;
+    for (auto &seg : segments_)
+    {
+        seg.length = (seg.end.pos - seg.start.pos).norm();
+        seg.duration = seg.length / seg.speed;
+        seg.startTime = startTime;
+        startTime += seg.duration;
+        totalLength_ += seg.length;
+    }
+    totalDuration_ = startTime;
 }
 
 void WeldTrajectory::applyTranslation(const Eigen::Vector3d &offset)
@@ -182,11 +232,19 @@ WeldTrajectory::Sample WeldTrajectory::sample(double elapsedSec) const
     const Segment &seg = segments_[segId];
     const double localT = std::clamp(t - seg.startTime, 0.0, seg.duration);
     const double u = std::clamp(localT / seg.duration, 0.0, 1.0);
+    const double u2 = u * u;
+    const double u3 = u2 * u;
+    const double u4 = u3 * u;
+    const double u5 = u4 * u;
+    const double s = 10.0 * u3 - 15.0 * u4 + 6.0 * u5;
+    const double dsDu = 30.0 * u2 - 60.0 * u3 + 30.0 * u4;
+    const double d2sDu2 = 60.0 * u - 180.0 * u2 + 120.0 * u3;
     const Eigen::Vector3d dp = seg.end.pos - seg.start.pos;
 
-    out.pose.pos = seg.start.pos + u * dp;
-    out.pose.quat = seg.start.quat.slerp(u, seg.end.quat).normalized();
-    out.linearVel = dp / seg.duration;
+    out.pose.pos = seg.start.pos + s * dp;
+    out.pose.quat = seg.start.quat.slerp(s, seg.end.quat).normalized();
+    out.linearVel = (dsDu / seg.duration) * dp;
+    out.linearAcc = (d2sDu2 / (seg.duration * seg.duration)) * dp;
     out.segmentIndex = segId;
     out.phase = totalDuration_ > 1e-8 ? std::clamp(t / totalDuration_, 0.0, 1.0) : 1.0;
     out.done = t >= totalDuration_;
@@ -197,6 +255,8 @@ WeldTrajectory::Sample WeldTrajectory::sample(double elapsedSec) const
         out.pose.quat = segments_.back().end.quat;
         out.linearVel.setZero();
         out.angularVel.setZero();
+        out.linearAcc.setZero();
+        out.angularAcc.setZero();
     }
     return out;
 }

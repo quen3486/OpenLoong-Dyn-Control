@@ -33,9 +33,14 @@ public:
 
     bool initialize(const ControllerConfig &config, std::string *errMsg = nullptr);
     bool initializeCommandPublisherOnly(const ControllerConfig &config, std::string *errMsg = nullptr);
+    bool initializeCommandPublisherWithJointStates(const ControllerConfig &config, std::string *errMsg = nullptr);
     void spinSome();
     bool isReady() const;
     bool hasFreshData(double timeoutSec) const;
+    bool getLatestCommandJointPositions(std::vector<double> &positions,
+                                        double maxAgeSec,
+                                        std::string *errMsg = nullptr) const;
+    size_t getActionSubscriptionCount() const;
 
     void dataBusWrite(DataBus &busIn);
     void setMotorsCommand(const std::vector<double> &qDesIn,
@@ -66,15 +71,20 @@ private:
     bool imuReceived_{false};
     bool jointStatesReceived_{false};
     bool jointStatesMappingPrinted_{false};
+    bool commandJointPositionsReceived_{false};
+    bool commandJointPositionsMappingPrinted_{false};
+    bool commandJointPositionFeedbackEnabled_{false};
     bool yawInited_{false};
     double yawSingle_{0.0};
     int yawRound_{0};
     size_t jointStatesInvalidWarnCount_{0};
+    size_t commandJointPositionsInvalidWarnCount_{0};
     size_t commandInvalidWarnCount_{0};
 
     mutable std::mutex dataMutex_;
     TimePoint lastImuTime_;
     TimePoint lastJointStatesTime_;
+    TimePoint lastCommandJointPositionsTime_;
 
     std::array<double, 4> quatWxyz_{{1.0, 0.0, 0.0, 0.0}};
     std::array<double, 3> baseAngVel_{{0.0, 0.0, 0.0}};
@@ -82,6 +92,8 @@ private:
     std::array<double, 12> motorsPos_{{0.0}};
     std::array<double, 12> motorsVel_{{0.0}};
     std::array<double, 12> motorsEff_{{0.0}};
+    std::array<double, 23> commandJointPositions_{{0.0}};
+    std::string commandJointPositionsLastIssue_;
 
     static const std::array<std::string, 12> kJointNamesPinOrder;
 #endif

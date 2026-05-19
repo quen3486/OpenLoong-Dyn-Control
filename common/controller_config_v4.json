@@ -1,6 +1,6 @@
 {
   // ===== ROS2接口（仿真发布/可视化） =====
-  "sim_ros_publish_dt": 0.002,             // 仿真真机开环命令发布周期(s)，500Hz
+  "sim_ros_publish_dt": 0.001,             // 仿真真机开环命令发布周期(s)，1000Hz
   "ros_topic_imu": "/imu/data",            // IMU姿态话题
   "ros_topic_joint_states": "/joint_states", // 关节状态话题
 
@@ -63,6 +63,10 @@
 
   // ===== 接触模型（MPC/WBC共享） =====
   "contact_miu": 0.7,            // 地面摩擦系数（统一用于MPC与WBC摩擦锥）
+
+  // ===== 焊接任务 =====
+  "weld_seam_length": 0.4,       // 工件焊缝长度(m)，启动时按该长度缩放直线焊缝
+  "weld_workpiece_random_enabled": false, // 是否在第一次按G准备焊接时随机生成工件位置
 
   // ===== MPC机型参数与接触约束 =====
   "mpc_mass": 59.12,               // speedbot_v4总质量(kg)，来自模型惯量质量和约59.115

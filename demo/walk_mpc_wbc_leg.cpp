@@ -828,8 +828,6 @@ public:
             rollPitchLimitRad_ = std::max(1.0, tmp) * kDeg2Rad;
         if (parseDoubleEnv(std::getenv("REAL_SAFETY_ANGVEL_LIMIT_RAD_S"), tmp))
             angVelLimitRadS_ = std::max(0.1, tmp);
-        if (parseDoubleEnv(std::getenv("REAL_SAFETY_CMD_JUMP_LIMIT_RAD"), tmp))
-            cmdJumpLimitRad_ = std::max(0.001, tmp);
     }
 
     void printConfig(const std::string &tag = "[Safety-Real]", bool printPvtTorqueLimits = true) const
@@ -837,8 +835,8 @@ public:
         std::cout << tag << " " << (enabled_ ? "enabled" : "disabled")
                   << ", roll_pitch_limit=" << rollPitchLimitRad_ / kDeg2Rad << " deg"
                   << ", angvel_limit=" << angVelLimitRadS_ << " rad/s"
-                  << ", cmd_jump_limit=" << cmdJumpLimitRad_ << " rad"
-                  << ", pvt_torque_limit_scale=" << pvtTorqueLimitScale_ << std::endl;
+                  << ", pvt_torque_limit_scale=" << pvtTorqueLimitScale_
+                  << ", command_jump_check=disabled" << std::endl;
         if (printPvtTorqueLimits && jointParams_.size() == expectedJointCount_)
         {
             std::cout << tag << " PVT torque limits:";
@@ -848,12 +846,6 @@ public:
             }
             std::cout << " N*m" << std::endl;
         }
-    }
-
-    void resetCommandHistory()
-    {
-        hasLastCommand_ = false;
-        lastCommand_.clear();
     }
 
     bool validateSensor(const DataBus &state, std::string &reason) const
@@ -1033,21 +1025,6 @@ public:
                 return false;
             }
         }
-        if (hasLastCommand_)
-        {
-            double maxJump = 0.0;
-            for (size_t i = 0; i < expectedJointCount_; i++)
-                maxJump = std::max(maxJump, std::fabs(qDesCmd[i] - lastCommand_[i]));
-            if (maxJump > cmdJumpLimitRad_)
-            {
-                std::ostringstream oss;
-                oss << "command jump over limit: max_jump=" << maxJump;
-                reason = oss.str();
-                return false;
-            }
-        }
-        lastCommand_.assign(qDesCmd.begin(), qDesCmd.begin() + expectedJointCount_);
-        hasLastCommand_ = true;
         return true;
     }
 
@@ -1056,13 +1033,10 @@ private:
     static constexpr double kDeg2Rad{3.14159265358979323846 / 180.0};
 
     bool enabled_{true};
-    bool hasLastCommand_{false};
     double rollPitchLimitRad_{12.0 * kDeg2Rad};
     double angVelLimitRadS_{5.0};
-    double cmdJumpLimitRad_{0.25};
     double pvtTorqueLimitScale_{0.5};
     std::vector<RealJointSafetyParam> jointParams_;
-    std::vector<double> lastCommand_;
 
     static bool isFiniteVector(const std::vector<double> &values)
     {
@@ -1613,10 +1587,6 @@ int runMujoco(const ControllerConfig &controllerConfig, bool simRealOpenloopRequ
         }
         simRealCommandSafetyStopped = true;
         simRealCommandPublishEnabled = false;
-        if (simRealCommandSafety)
-        {
-            simRealCommandSafety->resetCommandHistory();
-        }
     };
 
     auto extractSimRealTargetCommand = [&](std::vector<double> &targetPos,
@@ -1696,10 +1666,6 @@ int runMujoco(const ControllerConfig &controllerConfig, bool simRealOpenloopRequ
                 else if (simRealCommandPublishEnabled)
                 {
                     simRealCommandPublishEnabled = false;
-                    if (simRealCommandSafety)
-                    {
-                        simRealCommandSafety->resetCommandHistory();
-                    }
                     std::cout << "[PublishGate-SimOpenLoop] real command publishing stopped by P, topic="
                               << controllerConfig.rosTopicActionCmd << std::endl;
                 }
@@ -1720,10 +1686,6 @@ int runMujoco(const ControllerConfig &controllerConfig, bool simRealOpenloopRequ
                     simRealRampElapsed = 0.0;
                     simRealCommandPubCount = simRealCommandPubDecimation - 1;
                     simRealCommandPublishEnabled = true;
-                    if (simRealCommandSafety)
-                    {
-                        simRealCommandSafety->resetCommandHistory();
-                    }
                     std::cout << "[PublishGate-SimOpenLoop] real command publishing enabled by P, topic="
                               << controllerConfig.rosTopicActionCmd
                               << ", ramp_start="
@@ -1943,7 +1905,6 @@ int runRos2Real(const ControllerConfig &controllerConfig)
         jsInterp.setVxDesLPara(0.0, controllerConfig.vxStopRampTime);
         jsInterp.setVyDesLPara(0.0, controllerConfig.vxStopRampTime);
         jsInterp.setWzDesLPara(0.0, controllerConfig.wzStopRampTime);
-        safetyMonitor.resetCommandHistory();
         commandBlender.reset();
     };
 
@@ -1985,7 +1946,6 @@ int runRos2Real(const ControllerConfig &controllerConfig)
                 RobotState.motionState = DataBus::Stand;
                 autoWalkStarted = false;
                 jsInterp.reset();
-                safetyMonitor.resetCommandHistory();
                 commandBlender.reset();
                 std::cout << "[PublishGate-Real] control publishing enabled by P. Open-loop stand command active." << std::endl;
             }

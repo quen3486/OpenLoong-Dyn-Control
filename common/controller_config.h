@@ -83,6 +83,10 @@ struct ControllerConfig
     // Contact / friction params (shared source for MPC & WBC)
     double contactMiu{0.7};
 
+    // Welding task
+    double weldSeamLength{0.24};
+    bool weldWorkpieceRandomEnabled{false};
+
     // MPC model / constraint params
     double mpcMass{77.35};
     double mpcDeltaFootFront{0.073};

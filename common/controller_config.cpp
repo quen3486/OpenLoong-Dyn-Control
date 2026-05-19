@@ -135,6 +135,10 @@ bool loadControllerConfig(const std::string &jsonPath, ControllerConfig &outProf
     readOptionalDouble(root, "wbc_swing_kp", outProfile.swingLegKp);
     readOptionalDouble(root, "wbc_swing_kd", outProfile.swingLegKd);
     readOptionalDouble(root, "contact_miu", outProfile.contactMiu);
+
+    readOptionalDouble(root, "weld_seam_length", outProfile.weldSeamLength);
+    readOptionalBool(root, "weld_workpiece_random_enabled", outProfile.weldWorkpieceRandomEnabled);
+
     readOptionalDouble(root, "mpc_mass", outProfile.mpcMass);
     readOptionalDouble(root, "mpc_delta_foot_front", outProfile.mpcDeltaFootFront);
     readOptionalDouble(root, "mpc_delta_foot_rear", outProfile.mpcDeltaFootRear);
@@ -194,6 +198,7 @@ bool loadControllerConfig(const std::string &jsonPath, ControllerConfig &outProf
     outProfile.autoStartRampTime = std::max(outProfile.autoStartRampTime, 1e-3);
     outProfile.turnRateCmd = std::max(-3.0, std::min(3.0, outProfile.turnRateCmd));
     outProfile.contactMiu = std::clamp(outProfile.contactMiu, 0.01, 2.0);
+    outProfile.weldSeamLength = std::max(outProfile.weldSeamLength, 0.01);
     outProfile.mpcMass = std::max(outProfile.mpcMass, 1.0);
     outProfile.mpcDeltaFootFront = std::max(outProfile.mpcDeltaFootFront, 1e-4);
     outProfile.mpcDeltaFootRear = std::max(outProfile.mpcDeltaFootRear, 1e-4);
