@@ -119,15 +119,15 @@ update() @ 500 Hz
        命令值由 rlMotionControlCallback() 异步写入
 
 rlMotionControlCallback()  ← 异步回调（由 ROS2 executor 触发）
-  ├─ 只接受长度 36 的 Float64MultiArray：[pos12][vel12][torque12]
+  ├─ 只接受长度 69 的 Float64MultiArray：[pos23][vel23][torque23]
   ├─ 检查所有数据 finite、接口已绑定、控制器已进入 RL_MOTION_CONTROL
-  └─ 对前 12 个腿关节 i 写入 command interface：
+  └─ 对 23 个控制关节 i 写入 command interface：
        joint_pos_cmd_if_[i]  = msg->data[i]       （目标位置，rad）
-       joint_vel_cmd_if_[i]  = msg->data[12 + i]  （目标速度，rad/s）
-       joint_eff_cmd_if_[i]  = msg->data[24 + i]  （前馈力矩，N*m）
+       joint_vel_cmd_if_[i]  = msg->data[23 + i]  （目标速度，rad/s）
+       joint_eff_cmd_if_[i]  = msg->data[46 + i]  （前馈力矩，N*m）
        joint_kp_cmd_if_[i]   = stiffness[joint_names_[i]]
        joint_kd_cmd_if_[i]   = damping[joint_names_[i]]
-     腰关节（若配置）保持 default_joint_angles、0 速度、0 前馈力矩。
+     当前 MPC 临时发布模式下，速度和前馈力矩段全部为 0。
 ```
 
 ### 3.3 电机端扭矩计算（MIT 力控公式）
@@ -136,7 +136,7 @@ rlMotionControlCallback()  ← 异步回调（由 ROS2 executor 触发）
 
 $$\tau = kp \times (pos_{des} - pos_{actual}) + kd \times (vel_{des} - vel_{actual}) + \tau_{ff}$$
 
-MPC leg 真机链路会同时下发 $pos_{des}$、$vel_{des}$ 和 $\tau_{ff}$，因此底层执行的是完整 MIT 形式。
+当前 MPC 真机开环链路先只验证位置顺序，发布的 $vel_{des}$ 和 $\tau_{ff}$ 临时为 0；底层仍按 MIT 形式执行。
 
 ### 3.4 controllers.yaml 关键 KP/KD 值
 
@@ -155,29 +155,37 @@ MPC leg 真机链路会同时下发 $pos_{des}$、$vel_{des}$ 和 $\tau_{ff}$，
 ## 四、`/rl_motion_control_command` 数据结构
 
 **消息类型**：`std_msgs/Float64MultiArray`  
-**发布节点**：`walk_mpc_wbc_leg --ros2-real`、`walk_mpc_wbc_leg --sim-real-openloop`  
+**发布节点**：`walk_mpc_wbc_leg --ros2-real`、`walk_mpc_wbc_leg --sim-real-openloop`、`walk_mpc_wbc_v4 --sim-real-openloop`  
 **订阅节点**：`mit_controller`（`JointGroupMITController`）  
-**总长度**：**36 个 float64**
+**总长度**：**69 个 float64**
 
 ### 4.1 数据布局
 
 ```
-msg.data = [pos12] + [vel12] + [torque12]
+msg.data = [pos23] + [vel23] + [torque23]
 ```
 
 | 索引范围 | 内容 | 说明 |
 |---|---|---|
 | [0..11] | 12 个腿关节目标位置 | 单位 rad |
-| [12..23] | 12 个腿关节目标速度 | 单位 rad/s |
-| [24..35] | 12 个腿关节前馈力矩 | 单位 N*m |
+| [12] | waist_yaw 目标位置 | 当前固定 0 |
+| [13..17] | 左臂 5 关节目标位置 | leg 版本为 0，V4 版本来自 MPC/WBC |
+| [18..22] | 右臂 5 关节目标位置 | leg 版本为 0，V4 版本来自 MPC/WBC |
+| [23..45] | 23 关节目标速度 | 当前临时全 0 |
+| [46..68] | 23 关节前馈力矩 | 当前临时全 0 |
 
-12 个腿关节顺序固定为：
+23 个控制关节顺序固定为：
 
 ```
 left_hip_roll_joint, left_hip_yaw_joint, left_hip_pitch_joint,
 left_knee_joint, left_ankle_pitch_joint, left_ankle_roll_joint,
 right_hip_roll_joint, right_hip_yaw_joint, right_hip_pitch_joint,
-right_knee_joint, right_ankle_pitch_joint, right_ankle_roll_joint
+right_knee_joint, right_ankle_pitch_joint, right_ankle_roll_joint,
+waist_yaw_joint,
+left_shoulder_pitch_joint, left_shoulder_roll_joint, left_shoulder_yaw_joint,
+left_elbow_joint, left_wrist_roll_joint,
+right_shoulder_pitch_joint, right_shoulder_roll_joint, right_shoulder_yaw_joint,
+right_elbow_joint, right_wrist_roll_joint
 ```
 
 ### 4.2 MPC 目标生成过程
@@ -190,12 +198,15 @@ RobotState.motors_vel_des = wbc_dq_final;
 RobotState.motors_tor_des = wbc_tauJointRes;
 ```
 
-随后 `ROS2_Interface_V4_Leg::setMotorsCommand()` 固定发布 36 维：
+随后 `ROS2_Interface_V4_Leg::setMotorsCommand()` 固定发布 69 维：
 
 ```cpp
-msg.data[i]      = q_des[i];
-msg.data[12 + i] = dq_des[i];
-msg.data[24 + i] = tau_ff[i];
+// leg: q_des[0..11] -> msg.data[0..11], 其余位置段为 0
+// V4:  q_des[0..11] -> msg.data[0..11]
+//      q_des[12..16] -> msg.data[13..17]
+//      q_des[17..21] -> msg.data[18..22]
+// msg.data[12] 固定为 waist_yaw=0
+// msg.data[23..68] 当前临时全 0
 ```
 
 ### 4.3 观测向量组成
@@ -319,7 +330,7 @@ t≈1ms  walk_mpc_wbc_leg 收到 /imu/data 与 /joint_states
        ├─ 按关节名重排 12 个腿关节 position / velocity / effort
        ├─ StateEst / Pin_KinDyn 更新状态估计和动力学量
        ├─ MPC/WBC 生成 motors_pos_des / motors_vel_des / motors_tor_des
-       └─ 发布 /rl_motion_control_command（36个float：[pos12][vel12][torque12]）
+       └─ 按 P 门控发布 /rl_motion_control_command（69个float：[pos23][vel23][torque23]）
 
 t≈1ms  mit_controller 回调触发（异步）
        └─ 写入 command interfaces：pos/vel/eff/kp/kd
@@ -329,3 +340,5 @@ t≈1ms  mit_controller 回调触发（异步）
 ---
 
 *文档基于源码分析生成，如代码更新请同步修订。*
+
+#--sim-real-openloop 和 --ros2-real 

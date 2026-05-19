@@ -1,6 +1,6 @@
 {
   // ===== ROS2接口（真机/仿真桥统一） =====
-  "sim_ros_publish_dt": 0.01,           // 仿真真机开环命令发布周期(s)
+  "sim_ros_publish_dt": 0.002,          // 仿真真机开环命令发布周期(s)，500Hz
   "ros_topic_imu": "/imu/data",         // IMU姿态话题
   "ros_topic_joint_states": "/joint_states", // 关节状态话题
   "ros_topic_action_cmd": "/rl_motion_control_command", // 真机动作命令：69维 [pos23][vel23][torque23]
@@ -8,16 +8,16 @@
   "real_pvt_torque_limit_scale": 0.6,   // 真机PVT合力矩安全阈值比例：maxTorque * scale
 
   // ===== 控制循环频率 =====
-  "main_control_dt": 0.002,      // 主控制链路周期(s)，默认1kHz
+  "main_control_dt": 0.001,      // 主控制链路周期(s)，默认1kHz
   "mpc_control_dt": 0.005,       // MPC求解周期(s)，默认200Hz
   "phase_transition_blend_time_sec": 0.02, // Walk换相后命令平滑时间(s)，降低落脚冲击
   "contact_force_blend_time_sec": 0.03,    // Walk换相后新支撑腿WBC前馈力矩渐入时间(s)
 
   // ===== 步态调度（GaitScheduler） =====
-  "t_swing": 0.4,                // 单步摆动时间(s)
+  "t_swing": 0.5,                // 单步摆动时间(s)
   "phi_switch_min": 0.6,         // 允许换腿的最小相位
   "phi_switch_auto_design": false, // 是否按 t_swing 自动重算 phi_switch_min
-  "phi_switch_design_ref_t_swing": 0.4, // 参考摆动时间(s)
+  "phi_switch_design_ref_t_swing": 0.5, // 参考摆动时间(s)
   "phi_switch_design_ref": 0.6,  // 参考摆动时间下的最小换腿相位
   "phi_switch_design_power": 1.0,// 自适应指数，>1 对 t_swing 变化更敏感
   "phi_switch_design_min": 0.15, // 自动设计下限

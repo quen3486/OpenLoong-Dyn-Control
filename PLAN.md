@@ -61,7 +61,7 @@
 ## Selection Rule
 
 - 每组跑 3 次正常直行回归：
-  - `cd build && MUJOCO_REGRESSION_SCRIPT=1 MUJOCO_REGRESSION_SIM_END=30 ./walk_mpc_wbc_leg`
+  - `cd build && ./walk_mpc_wbc_leg`，手动执行 `F -> Space -> W -> J`
 - 只统计 `motionState=Walk` 段。
 - 先剔除不合格组：
   - 行走段不足 `15.5s`

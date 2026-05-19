@@ -11,7 +11,7 @@ Feel free to use in any purpose, and cite OpenLoong-Dynamics-Control in any styl
 
 struct ControllerConfig
 {
-    double simRosPublishDt{0.01};
+    double simRosPublishDt{0.002};
 
     // ROS2 topic names for real backend
     std::string rosTopicImu{"/imu/data"};
@@ -60,7 +60,7 @@ struct ControllerConfig
     double wzStopRampTime{0.5};
     double speedUpdateRampTime{0.6};
     double headingResetRampTime{0.3};
-    double autoStartRampTime{1.0};
+    double autoStartRampTime{3.0};
     double turnRateCmd{0.2};
 
     // Speed knobs

@@ -1,18 +1,18 @@
 {
   // ===== ROS2接口（仿真发布/可视化） =====
-  "sim_ros_publish_dt": 0.01,              // 仿真真机开环命令发布周期(s)
+  "sim_ros_publish_dt": 0.002,             // 仿真真机开环命令发布周期(s)，500Hz
   "ros_topic_imu": "/imu/data",            // IMU姿态话题
   "ros_topic_joint_states": "/joint_states", // 关节状态话题
 
   // ===== 控制循环频率 =====
-  "main_control_dt": 0.001,      // 主控制链路周期(s)，当前500Hz
-  "mpc_control_dt": 0.02,        // MPC求解周期(s)，当前100Hz
+  "main_control_dt": 0.001,      // 主控制链路周期(s)，默认1kHz
+  "mpc_control_dt": 0.005,       // MPC求解周期(s)，默认200Hz
 
   // ===== 步态调度（GaitScheduler） =====
-  "t_swing": 0.4,                // 单步摆动时间(s)
+  "t_swing": 0.45,                // 单步摆动时间(s)
   "phi_switch_min": 0.6,         // 允许换腿的最小相位
   "phi_switch_auto_design": false, // 是否按 t_swing 自动重算 phi_switch_min
-  "phi_switch_design_ref_t_swing": 0.4, // 参考摆动时间(s)
+  "phi_switch_design_ref_t_swing": 0.45, // 参考摆动时间(s)
   "phi_switch_design_ref": 0.6,  // 参考摆动时间下的最小换腿相位
   "phi_switch_design_power": 1.0,// 自适应指数，>1 对 t_swing 变化更敏感
   "phi_switch_design_min": 0.15, // 自动设计下限
@@ -24,7 +24,7 @@
   "foot_kp_vx": 0.03,            // 前后速度反馈增益
   "foot_kp_vy": 0.03,            // 左右速度反馈增益
   "foot_kp_wz": 0.03,            // 偏航角速度反馈增益
-  "step_height": 0.12,          // 摆腿抬脚高度(m)，降低冲击并改善落脚一致性
+  "step_height": 0.03,          // 摆腿抬脚高度(m)，降低冲击并改善落脚一致性
   "x_offset_l": -0.07,           // 足端x偏置(机体坐标系, 左腿符号基准)
   "y_offset_l": 0.04,            // 足端y偏置(机体坐标系, 左腿符号基准)
   "z_offset_w": -0.035,          // 足端z偏置(世界系)

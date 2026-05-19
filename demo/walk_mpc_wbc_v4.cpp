@@ -5,6 +5,7 @@
 #include <GLFW/glfw3.h>
 #include "GLFW_callbacks.h"
 #include "MJ_interface_v4.h"
+#include "ROS2_interface_v4_leg.h"
 #include "PVT_ctrl_v4.h"
 #include "data_logger.h"
 #include "data_bus.h"
@@ -16,6 +17,7 @@
 #include "foot_placement.h"
 #include "joystick_interpreter.h"
 #include "controller_config.h"
+#include "json/json.h"
 #include "weld_trajectory.h"
 #include <string>
 #include <iostream>
@@ -26,10 +28,13 @@
 #include <cctype>
 #include <chrono>
 #include <future>
+#include <fstream>
 #include <limits>
+#include <memory>
 #include <random>
 #include <sstream>
 #include <thread>
+#include <utility>
 #include <vector>
 #include "StateEst.h"
 
@@ -80,6 +85,196 @@ unsigned int readUIntEnv(const char *name, unsigned int fallback)
     return (endPtr == env) ? fallback : static_cast<unsigned int>(value);
 }
 
+double readDoubleEnv(const char *name, double fallback)
+{
+    const char *env = std::getenv(name);
+    if (env == nullptr || std::string(env).empty())
+    {
+        return fallback;
+    }
+    char *endPtr = nullptr;
+    const double value = std::strtod(env, &endPtr);
+    return (endPtr == env || !std::isfinite(value)) ? fallback : value;
+}
+
+bool hasArg(int argc, char **argv, const std::string &arg)
+{
+    for (int i = 1; i < argc; i++)
+    {
+        if (argv[i] != nullptr && arg == argv[i])
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
+const std::array<std::string, 22> kV4CommandSourceJointNames = {
+    "left_hip_roll_joint", "left_hip_yaw_joint", "left_hip_pitch_joint",
+    "left_knee_joint", "left_ankle_pitch_joint", "left_ankle_roll_joint",
+    "right_hip_roll_joint", "right_hip_yaw_joint", "right_hip_pitch_joint",
+    "right_knee_joint", "right_ankle_pitch_joint", "right_ankle_roll_joint",
+    "left_shoulder_pitch_joint", "left_shoulder_roll_joint", "left_shoulder_yaw_joint",
+    "left_elbow_joint", "left_wrist_roll_joint",
+    "right_shoulder_pitch_joint", "right_shoulder_roll_joint", "right_shoulder_yaw_joint",
+    "right_elbow_joint", "right_wrist_roll_joint"};
+
+struct V4OpenloopJointLimit
+{
+    std::string name;
+    double minPos{-3.14};
+    double maxPos{3.14};
+};
+
+bool loadV4OpenloopJointLimits(std::vector<V4OpenloopJointLimit> &outLimits,
+                               std::string &loadedPath,
+                               std::string &errMsg)
+{
+    const std::array<std::string, 3> candidates = {
+        "../common/joint_ctrl_config_v4.json",
+        "common/joint_ctrl_config_v4.json",
+        "joint_ctrl_config_v4.json"};
+
+    Json::Value root;
+    std::string parseErr;
+    for (const std::string &path : candidates)
+    {
+        std::ifstream in(path, std::ios::binary);
+        if (!in.is_open())
+        {
+            continue;
+        }
+        Json::CharReaderBuilder builder;
+        builder["allowComments"] = true;
+        builder["collectComments"] = false;
+        if (!Json::parseFromStream(builder, in, &root, &parseErr))
+        {
+            errMsg = "failed to parse " + path + ": " + parseErr;
+            return false;
+        }
+        loadedPath = path;
+        break;
+    }
+
+    if (loadedPath.empty())
+    {
+        errMsg = "failed to open joint_ctrl_config_v4.json";
+        return false;
+    }
+
+    outLimits.clear();
+    outLimits.reserve(kV4CommandSourceJointNames.size());
+    for (const std::string &name : kV4CommandSourceJointNames)
+    {
+        if (!root.isMember(name))
+        {
+            errMsg = "joint config missing " + name;
+            return false;
+        }
+        const Json::Value &joint = root[name];
+        if (!joint.isMember("minPos") || !joint["minPos"].isNumeric() ||
+            !joint.isMember("maxPos") || !joint["maxPos"].isNumeric())
+        {
+            errMsg = "joint config " + name + " missing numeric minPos/maxPos";
+            return false;
+        }
+        V4OpenloopJointLimit limit;
+        limit.name = name;
+        limit.minPos = joint["minPos"].asDouble();
+        limit.maxPos = joint["maxPos"].asDouble();
+        outLimits.push_back(limit);
+    }
+    errMsg.clear();
+    return true;
+}
+
+class V4OpenloopSafetyMonitor
+{
+public:
+    explicit V4OpenloopSafetyMonitor(std::vector<V4OpenloopJointLimit> limits)
+        : limits_(std::move(limits))
+    {
+        enabled_ = readBoolEnv("REAL_SAFETY_ENABLE", true);
+        cmdJumpLimitRad_ = std::max(0.001, readDoubleEnv("REAL_SAFETY_CMD_JUMP_LIMIT_RAD", cmdJumpLimitRad_));
+    }
+
+    void printConfig() const
+    {
+        std::cout << "[Safety-V4SimOpenLoop] " << (enabled_ ? "enabled" : "disabled")
+                  << ", cmd_jump_limit=" << cmdJumpLimitRad_
+                  << " rad, checked_joints=" << limits_.size() << std::endl;
+    }
+
+    void resetCommandHistory()
+    {
+        hasLastCommand_ = false;
+        lastCommand_.clear();
+    }
+
+    bool validateCommandAndRemember(const std::vector<double> &qDes, std::string &reason)
+    {
+        if (qDes.size() < kV4CommandSourceJointNames.size())
+        {
+            reason = "position command vector invalid: fewer than 22 values";
+            return false;
+        }
+        for (size_t i = 0; i < kV4CommandSourceJointNames.size(); i++)
+        {
+            if (!std::isfinite(qDes[i]))
+            {
+                reason = "position command vector invalid: contains NaN/Inf";
+                return false;
+            }
+        }
+        if (!enabled_)
+        {
+            return true;
+        }
+        if (limits_.size() != kV4CommandSourceJointNames.size())
+        {
+            reason = "joint limit table invalid";
+            return false;
+        }
+        for (size_t i = 0; i < limits_.size(); i++)
+        {
+            if (qDes[i] < limits_[i].minPos || qDes[i] > limits_[i].maxPos)
+            {
+                std::ostringstream oss;
+                oss << "joint command position over limit: " << limits_[i].name
+                    << ", q_des=" << qDes[i]
+                    << ", range=[" << limits_[i].minPos << ", " << limits_[i].maxPos << "]";
+                reason = oss.str();
+                return false;
+            }
+        }
+        if (hasLastCommand_)
+        {
+            double maxJump = 0.0;
+            for (size_t i = 0; i < limits_.size(); i++)
+            {
+                maxJump = std::max(maxJump, std::fabs(qDes[i] - lastCommand_[i]));
+            }
+            if (maxJump > cmdJumpLimitRad_)
+            {
+                std::ostringstream oss;
+                oss << "command jump over limit: max_jump=" << maxJump;
+                reason = oss.str();
+                return false;
+            }
+        }
+        lastCommand_.assign(qDes.begin(), qDes.begin() + kV4CommandSourceJointNames.size());
+        hasLastCommand_ = true;
+        return true;
+    }
+
+private:
+    bool enabled_{true};
+    bool hasLastCommand_{false};
+    double cmdJumpLimitRad_{0.25};
+    std::vector<V4OpenloopJointLimit> limits_;
+    std::vector<double> lastCommand_;
+};
+
 int defaultWeldStanceThreadCount()
 {
     const unsigned int hw = std::thread::hardware_concurrency();
@@ -112,6 +307,29 @@ bool isWeldMotionState(DataBus::MotionState state)
 {
     return state == DataBus::WeldPrepare || state == DataBus::Weld ||
            state == DataBus::WeldHold || state == DataBus::WeldRecover;
+}
+
+const char *motionStateName(DataBus::MotionState state)
+{
+    switch (state)
+    {
+    case DataBus::Stand:
+        return "Stand";
+    case DataBus::Walk:
+        return "Walk";
+    case DataBus::Walk2Stand:
+        return "Walk2Stand";
+    case DataBus::WeldPrepare:
+        return "WeldPrepare";
+    case DataBus::Weld:
+        return "Weld";
+    case DataBus::WeldHold:
+        return "WeldHold";
+    case DataBus::WeldRecover:
+        return "WeldRecover";
+    default:
+        return "Unknown";
+    }
 }
 
 struct WeldStanceCandidate
@@ -283,15 +501,11 @@ constexpr double weldArmClearanceThreshold = 0.03;
 constexpr double weldTcpContactExclusionLength = 0.10;
 constexpr int weldClearanceSegmentSamples = 16;
 constexpr double weldBaseZStabilityMin = 0.98;
-constexpr double weldWorkpieceVisDelay = 1.0;
 constexpr double weldPreApproachDistDefault = 0.08;
 constexpr double weldMinPreApproachClearanceDefault = 0.06;
 constexpr double weldHoldDurationDefault = 0.8;
 constexpr double weldRecoverDurationDefault = 3.0;
-constexpr double weldStanceTransitionDurationDefault = 1.5;
-constexpr double weldAutoTestCloseLoopTDefault = 1.5;
-constexpr double weldAutoTestStartTDefault = 3.0;
-constexpr double weldAutoTestPostCloseLoopTDefault = 1.5;
+constexpr double weldStanceTransitionDurationDefault = 5.0;
 constexpr double weldPrepareHoldTDefault = 0.2;
 constexpr double weldPrepareMaxTDefault = 3.0;
 constexpr double weldPrepareMinPhaseDefault = 0.95;
@@ -1158,6 +1372,7 @@ int main(int argc, char **argv)
     {
         std::cerr << "[ControllerConfig] fallback to built-in defaults: " << controllerConfigErr << std::endl;
     }
+    const bool simRealOpenloopRequested = hasArg(argc, argv, "--sim-real-openloop");
     const double simDt = mj_model->opt.timestep;
     const int mainCtrlDecimation = std::max(1, static_cast<int>(std::lround(controllerConfig.mainControlDt / simDt)));
     const double mainCtrlDt = simDt * mainCtrlDecimation;
@@ -1176,6 +1391,25 @@ int main(int argc, char **argv)
     JoyStickInterpreter jsInterp(mainCtrlDt);
     DataLogger logger("../record/datalog.log");
     StateEst StateModule(mainCtrlDt);
+    ROS2_Interface_V4_Leg simRealCommandPub;
+    std::unique_ptr<V4OpenloopSafetyMonitor> simRealCommandSafety;
+    bool simRealOpenloopEnabled = false;
+    bool simRealCommandPublishEnabled = false;
+    bool simRealCommandSafetyStopped = false;
+    int simRealCommandPubCount = 0;
+    const int simRealCommandPubDecimation =
+        std::max(1, static_cast<int>(std::lround(controllerConfig.simRosPublishDt / mainCtrlDt)));
+    const double realCommandInitialRampTimeSec = 5.0;
+    const double realWeldStanceRampTimeSec = weldStanceTransitionDurationDefault;
+    std::vector<double> simRealLastPublishedPos;
+    std::vector<double> simRealRampStartPos(kV4CommandSourceJointNames.size(), 0.0);
+    double simRealRampElapsed = 0.0;
+    bool realWeldStanceRampActive = false;
+    double realWeldStanceRampElapsed = 0.0;
+    std::vector<double> realWeldStanceRampStart(kV4CommandSourceJointNames.size(), 0.0);
+    std::vector<double> realWeldStanceRampTarget(kV4CommandSourceJointNames.size(), 0.0);
+    const std::vector<double> simRealZeroVel(kV4CommandSourceJointNames.size(), 0.0);
+    const std::vector<double> simRealZeroTau(kV4CommandSourceJointNames.size(), 0.0);
     Eigen::Matrix3d mpcInertiaCfg;
     mpcInertiaCfg << controllerConfig.mpcInertiaXx, controllerConfig.mpcInertiaXy, controllerConfig.mpcInertiaXz,
                      controllerConfig.mpcInertiaXy, controllerConfig.mpcInertiaYy, controllerConfig.mpcInertiaYz,
@@ -1193,6 +1427,37 @@ int main(int argc, char **argv)
                              controllerConfig.mpcTorqueMaxX, controllerConfig.mpcTorqueMaxY, controllerConfig.mpcTorqueMaxZ);
     MPC_solv.setHorizon(controllerConfig.mpcPredictionHorizon, controllerConfig.mpcControlHorizon);
     WBC_solv.setContactMiu(controllerConfig.contactMiu);
+
+    if (simRealOpenloopRequested)
+    {
+        std::string simRealRosErr;
+        if (!simRealCommandPub.initializeCommandPublisherOnly(controllerConfig, &simRealRosErr))
+        {
+            std::cerr << "[ROS2-OpenLoop-V4] command publisher initialization failed: "
+                      << simRealRosErr << std::endl;
+            return 1;
+        }
+
+        std::vector<V4OpenloopJointLimit> jointLimits;
+        std::string jointLimitPath;
+        std::string jointLimitErr;
+        if (!loadV4OpenloopJointLimits(jointLimits, jointLimitPath, jointLimitErr))
+        {
+            std::cerr << "[Safety-V4SimOpenLoop] failed to load joint limits: "
+                      << jointLimitErr << std::endl;
+            return 1;
+        }
+        simRealCommandSafety = std::make_unique<V4OpenloopSafetyMonitor>(jointLimits);
+        simRealCommandSafety->printConfig();
+        simRealOpenloopEnabled = true;
+        simRealCommandPubCount = simRealCommandPubDecimation - 1;
+        std::cout << "[ROS2-OpenLoop-V4] ready, publish_dt="
+                  << simRealCommandPubDecimation * mainCtrlDt
+                  << " s, action_topic=" << controllerConfig.rosTopicActionCmd << std::endl;
+        std::cout << "[Command-V4SimOpenLoop] publishes Float64MultiArray[69]=[pos23][zero_vel23][zero_torque23]; "
+                  << "V4 source [leg12][left_arm5][right_arm5], command waist_yaw=0." << std::endl;
+        std::cout << "[PublishGate-V4SimOpenLoop] startup publishes nothing. Press P to start/stop real command publishing." << std::endl;
+    }
 
     WeldWorkpieceRuntime weldWorkpiece;
     bool weldWorkpieceActivated = false;
@@ -1228,8 +1493,8 @@ int main(int argc, char **argv)
     const double weldHoldDuration = weldHoldDurationDefault;
     const double weldRecoverDuration = weldRecoverDurationDefault;
     Eigen::Vector3d weldPreApproachTcp_W = Eigen::Vector3d::Zero();
-    std::cout << "[WeldWorkpiece] visual sequence: default stand first, randomize after "
-              << weldWorkpieceVisDelay << " s." << std::endl;
+    std::cout << "[WeldWorkpiece] startup: nominal workpiece; interactive weld preparation waits for G."
+              << std::endl;
     std::cout << "[Weld] preapproach=" << weldPreApproachDist
               << " m, min_clearance=" << weldMinPreApproachClearance
               << " m, hold=" << weldHoldDuration
@@ -1241,7 +1506,14 @@ int main(int argc, char **argv)
     uiController.createWindow("Demo_V4", false);
     uiController.setGeomGroupVisible(0, false);
     UIctr::ButtonState buttonState;
-    std::cout << "[OpenLoop] press F to enable closed-loop walk control." << std::endl;
+    std::cout << "[Mode] startup: open-loop stand. F=closed-loop Stand, Space=Walk, "
+              << "G=prepare/start weld in Stand." << std::endl;
+    if (simRealOpenloopEnabled)
+    {
+        std::cout << "[Key-V4SimOpenLoop] P(publish real command on/off) G(weld prepare/start) "
+                  << "F(closed-loop) Space(stand/walk) W/S/A/D(move) Q/E(speed) J(stop) H(reset yaw)"
+                  << std::endl;
+    }
 
     // initialize variables
     // speedbot_v4: leg length ~0.983m, use 0.95 for slight bend; foot height ~0.053m     
@@ -1461,6 +1733,48 @@ int main(int argc, char **argv)
         weldStanceCoM_W = best.basePos + yawRot(best.yaw) * kinDynSolver.computeFixedCoM(qIniFixedDes);
         hd_l_des = qIniFixedDes.segment<5>(12);
         hd_r_des = qIniFixedDes.segment<5>(17);
+        if (simRealOpenloopEnabled && simRealCommandPublishEnabled)
+        {
+            bool targetValid = qIniFixedDes.size() >= static_cast<int>(kV4CommandSourceJointNames.size());
+            for (size_t i = 0; targetValid && i < kV4CommandSourceJointNames.size(); i++)
+            {
+                targetValid = std::isfinite(qIniFixedDes(static_cast<int>(i)));
+            }
+
+            if (simRealLastPublishedPos.size() == kV4CommandSourceJointNames.size() && targetValid)
+            {
+                realWeldStanceRampStart = simRealLastPublishedPos;
+                for (size_t i = 0; i < kV4CommandSourceJointNames.size(); i++)
+                {
+                    realWeldStanceRampTarget[i] = qIniFixedDes(static_cast<int>(i));
+                }
+                double maxStartDelta = 0.0;
+                for (size_t i = 0; i < kV4CommandSourceJointNames.size(); i++)
+                {
+                    maxStartDelta = std::max(maxStartDelta,
+                                             std::fabs(realWeldStanceRampTarget[i] - realWeldStanceRampStart[i]));
+                }
+                realWeldStanceRampElapsed = 0.0;
+                realWeldStanceRampActive = true;
+                simRealRampElapsed = realCommandInitialRampTimeSec;
+                std::cout << "[Publish-V4SimOpenLoop] weld stance real command ramp started: "
+                          << "from last published command to searched stance, duration="
+                          << realWeldStanceRampTimeSec
+                          << " s, max_delta=" << maxStartDelta << " rad" << std::endl;
+            }
+            else
+            {
+                simRealCommandPublishEnabled = false;
+                realWeldStanceRampActive = false;
+                if (simRealCommandSafety)
+                {
+                    simRealCommandSafety->resetCommandHistory();
+                }
+                std::cerr << "[Publish-V4SimOpenLoop] stopped real command publishing: "
+                          << "weld stance target needs a valid last published command and finite 22-DoF target."
+                          << " Press P again after checking the robot side." << std::endl;
+            }
+        }
         if (weldReapplyOnCloseLoop)
         {
             weldStanceTransitionStartQpos = readMujocoQpos(mj_model, mj_data);
@@ -1686,14 +2000,10 @@ int main(int argc, char **argv)
     constexpr int logDecimation = 5;
 
     bool openLoopPhaseActive = true;
-    const bool weldAutoTest = readBoolEnv("WELD_AUTOTEST", false);
-    const double weldAutoTestCloseLoopT = weldAutoTestCloseLoopTDefault;
-    const double weldAutoTestStartT = weldAutoTestStartTDefault;
-    const double weldAutoTestPostCloseLoopT = weldAutoTestPostCloseLoopTDefault;
-    bool weldAutoTestSentF = false;
-    bool weldAutoTestSentG = false;
-    double weldAutoTestFTime = -1.0;
-    double simEndTime = weldAutoTest ? 12.0 : 200.0;
+    bool weldTaskRequested = false;
+    bool weldStartPromptPrinted = false;
+    double simEndTime = 200.0;
+    const bool headlessMode = readBoolEnv("HEADLESS", false);
     const char *autoWalkEnv = std::getenv("AUTOWALK");
     const bool autoWalk = (autoWalkEnv != nullptr) && (std::string(autoWalkEnv) == "1");
     bool autoWalkStarted = false;
@@ -1744,17 +2054,15 @@ int main(int argc, char **argv)
     {
         autoStopTime = std::atof(autoStopEnv);
     }
-    const char *simEndEnv = std::getenv("SIM_END");
-    if (simEndEnv != nullptr)
+    const bool finiteSimDuration = headlessMode;
+    if (finiteSimDuration)
     {
-        simEndTime = std::max(1.0, std::atof(simEndEnv));
+        std::cout << "[MuJoCo] finite run enabled, sim_end_t=" << simEndTime
+                  << " s, reason=headless" << std::endl;
     }
-    if (weldAutoTest)
+    else
     {
-        std::cout << "[WeldAutoTest] enabled: close_loop_t=" << weldAutoTestCloseLoopT
-                  << " s, start_t=" << weldAutoTestStartT
-                  << " s, post_close_loop_t=" << weldAutoTestPostCloseLoopT
-                  << " s, sim_end=" << simEndTime << " s" << std::endl;
+        std::cout << "[MuJoCo] interactive run has no fixed simulation time limit." << std::endl;
     }
     std::cout << "[WeldPrepare] hold=" << weldPrepareHoldT
               << " s, max=" << weldPrepareMaxT
@@ -1805,8 +2113,130 @@ int main(int argc, char **argv)
         }
     };
 
+    auto maybePrintWeldReadyPrompt = [&]()
+    {
+        if (weldTaskRequested && !weldStartPromptPrinted &&
+            weldTrajectoryReady && weldStanceReady &&
+            !weldStanceSearchRunning && !weldStanceTransitionActive &&
+            !realWeldStanceRampActive)
+        {
+            std::cout << "[Weld] preparation ready; press G again in Stand to start WeldPrepare."
+                      << std::endl;
+            weldStartPromptPrinted = true;
+        }
+    };
+
+    auto stopSimRealPublishingForSafety = [&](const std::string &reason)
+    {
+        if (!simRealCommandSafetyStopped)
+        {
+            std::cerr << "[Safety-V4SimOpenLoop] stopped real command publishing: "
+                      << reason << std::endl;
+            std::cerr << "[Safety-V4SimOpenLoop] restart the demo after checking the robot side."
+                      << std::endl;
+        }
+        simRealCommandSafetyStopped = true;
+        simRealCommandPublishEnabled = false;
+        realWeldStanceRampActive = false;
+        if (simRealCommandSafety)
+        {
+            simRealCommandSafety->resetCommandHistory();
+        }
+    };
+
+    auto publishV4SimRealCommand = [&](double now)
+    {
+        if (!simRealOpenloopEnabled || !simRealCommandPublishEnabled)
+        {
+            return;
+        }
+        if (RobotState.motors_pos_des.size() < kV4CommandSourceJointNames.size())
+        {
+            stopSimRealPublishingForSafety("motors_pos_des invalid: fewer than 22 values");
+            return;
+        }
+
+        std::vector<double> targetPos(RobotState.motors_pos_des.begin(),
+                                      RobotState.motors_pos_des.begin() + kV4CommandSourceJointNames.size());
+        for (double value : targetPos)
+        {
+            if (!std::isfinite(value))
+            {
+                stopSimRealPublishingForSafety("motors_pos_des invalid: contains NaN/Inf");
+                return;
+            }
+        }
+
+        std::vector<double> publishPos = targetPos;
+        if (realWeldStanceRampActive)
+        {
+            const double rampTime = std::max(realWeldStanceRampTimeSec, mainCtrlDt);
+            const double ratio = std::clamp(realWeldStanceRampElapsed / rampTime, 0.0, 1.0);
+            const double alpha = ratio * ratio * (3.0 - 2.0 * ratio);
+            for (size_t i = 0; i < publishPos.size(); i++)
+            {
+                publishPos[i] = (1.0 - alpha) * realWeldStanceRampStart[i] + alpha * realWeldStanceRampTarget[i];
+            }
+            realWeldStanceRampElapsed += mainCtrlDt;
+            if (realWeldStanceRampElapsed >= rampTime)
+            {
+                publishPos = realWeldStanceRampTarget;
+                realWeldStanceRampActive = false;
+                std::cout << "[Publish-V4SimOpenLoop] weld stance real command ramp complete at t="
+                          << now << " s" << std::endl;
+                maybePrintWeldReadyPrompt();
+            }
+        }
+        else
+        {
+            const double rampTime = std::max(realCommandInitialRampTimeSec, mainCtrlDt);
+            if (simRealRampElapsed < rampTime)
+            {
+                const double ratio = std::clamp(simRealRampElapsed / rampTime, 0.0, 1.0);
+                const double alpha = ratio * ratio * (3.0 - 2.0 * ratio);
+                for (size_t i = 0; i < publishPos.size(); i++)
+                {
+                    publishPos[i] = (1.0 - alpha) * simRealRampStartPos[i] + alpha * targetPos[i];
+                }
+                simRealRampElapsed += mainCtrlDt;
+            }
+        }
+
+        simRealCommandPubCount++;
+        if (simRealCommandPubCount < simRealCommandPubDecimation)
+        {
+            return;
+        }
+        simRealCommandPubCount = 0;
+
+        std::string safetyReason;
+        if (simRealCommandSafety == nullptr)
+        {
+            stopSimRealPublishingForSafety("safety monitor unavailable");
+            return;
+        }
+        if (!simRealCommandSafety->validateCommandAndRemember(publishPos, safetyReason))
+        {
+            stopSimRealPublishingForSafety(safetyReason);
+            return;
+        }
+
+        simRealCommandPub.setMotorsCommand(publishPos, simRealZeroVel, simRealZeroTau);
+        simRealCommandPub.spinSome();
+        simRealLastPublishedPos = publishPos;
+        static int publishLogCount = 0;
+        if (publishLogCount == 0 || publishLogCount % 500 == 0)
+        {
+            std::cout << "[Publish-V4SimOpenLoop] sent command at t=" << now
+                      << " s, motionState=" << motionStateName(RobotState.motionState)
+                      << ", topic=" << controllerConfig.rosTopicActionCmd << std::endl;
+        }
+        publishLogCount++;
+    };
+
     mjtNum simstart = mj_data->time;
     double simTime = mj_data->time;
+    std::string mujocoExitReason = "window closed";
 
     while (!glfwWindowShouldClose(uiController.window))
     {
@@ -1815,10 +2245,6 @@ int main(int argc, char **argv)
         {
             mj_step(mj_model, mj_data);
             simTime = mj_data->time;
-            if (!weldWorkpieceActivated && simTime >= weldWorkpieceVisDelay)
-            {
-                activateWeldWorkpiece(simTime);
-            }
             if (weldStanceTransitionActive)
             {
                 const double alphaRaw = weldStanceTransitionDuration > 1.0e-9
@@ -1861,6 +2287,7 @@ int main(int argc, char **argv)
                 commitWeldStanceResult(weldStanceFuture.get(), simTime);
                 weldHoldOptimizedStance = weldStanceReady && weldStanceAuto &&
                                           weldReapplyOnCloseLoop && !weldStanceTransitionActive;
+                maybePrintWeldReadyPrompt();
             }
             if (weldStanceTransitionJustFinished)
             {
@@ -1878,94 +2305,88 @@ int main(int argc, char **argv)
                 WBC_solv.setQini(qIniDes, RobotState.q);
                 weldHoldOptimizedStance = weldStanceReady && weldStanceAuto && weldReapplyOnCloseLoop;
                 weldStanceTransitionJustFinished = false;
+                maybePrintWeldReadyPrompt();
             }
 
             buttonState = uiController.getButtonState();
-            if (weldAutoTest)
+            if (simRealOpenloopEnabled && buttonState.key_p)
             {
-                const bool weldStanceCanCloseLoop =
-                    weldWorkpieceActivated &&
-                    (!weldStanceAuto ||
-                     (weldStanceSearchDone && !weldStanceSearchRunning && !weldStanceTransitionActive));
-                if (!weldAutoTestSentF && openLoopPhaseActive && simTime >= weldAutoTestCloseLoopT &&
-                    weldStanceCanCloseLoop)
+                if (simRealCommandSafetyStopped)
                 {
-                    buttonState.key_f = true;
-                    weldAutoTestSentF = true;
-                    weldAutoTestFTime = simTime;
-                    std::cout << "[WeldAutoTest] press F at t=" << simTime << " s" << std::endl;
+                    std::cerr << "[PublishGate-V4SimOpenLoop] P ignored after safety stop. Please restart manually." << std::endl;
                 }
-                const double weldAutoTestEarliestG =
-                    std::max(weldAutoTestStartT,
-                             (weldAutoTestFTime >= 0.0)
-                                 ? weldAutoTestFTime + weldAutoTestPostCloseLoopT
-                                 : weldAutoTestStartT);
-                if (!weldAutoTestSentG && !openLoopPhaseActive &&
-                    RobotState.motionState == DataBus::Stand && simTime >= weldAutoTestEarliestG)
+                else if (simRealCommandPublishEnabled)
                 {
-                    buttonState.key_g = true;
-                    weldAutoTestSentG = true;
-                    std::cout << "[WeldAutoTest] press G at t=" << simTime << " s" << std::endl;
-                }
-            }
-            if (buttonState.key_f && openLoopPhaseActive)
-            {
-                if (!weldWorkpieceActivated)
-                {
-                    std::cout << "[OpenLoop] F ignored: waiting for workpiece randomization."
-                              << std::endl;
-                }
-                else if (weldStanceAuto &&
-                    (!weldStanceSearchDone || weldStanceTransitionActive))
-                {
-                    std::cout << "[OpenLoop] F ignored: waiting for weld stance search/visual transition."
-                              << std::endl;
+                    simRealCommandPublishEnabled = false;
+                    realWeldStanceRampActive = false;
+                    if (simRealCommandSafety)
+                    {
+                        simRealCommandSafety->resetCommandHistory();
+                    }
+                    std::cout << "[PublishGate-V4SimOpenLoop] real command publishing stopped by P, topic="
+                              << controllerConfig.rosTopicActionCmd << std::endl;
                 }
                 else
                 {
-                    if (weldReapplyOnCloseLoop && weldStanceAuto && weldStanceReady)
+                    realWeldStanceRampActive = false;
+                    simRealRampStartPos.assign(kV4CommandSourceJointNames.size(), 0.0);
+                    const bool hasLastCommand =
+                        simRealLastPublishedPos.size() == kV4CommandSourceJointNames.size();
+                    if (hasLastCommand)
                     {
-                        const Eigen::Vector3d basePos = weldStanceBaseXyzYaw.head<3>();
-                        const double yaw = weldStanceBaseXyzYaw(3);
-                        applyInitialPoseToMujoco(mj_model, mj_data, basePos, yaw, qIniFixedDes);
-                        mj_interface.updateSensorValues();
-                        mj_interface.dataBusWrite(RobotState);
-                        mj_interface.updateSensorValues();
-                        mj_interface.dataBusWrite(RobotState);
-                        kinDynSolver.dataBusRead(RobotState);
-                        kinDynSolver.computeJ_dJ();
-                        kinDynSolver.computeDyn();
-                        kinDynSolver.dataBusWrite(RobotState);
-                        StateModule.init(RobotState);
-                        jsInterp.setIniPos(basePos.x(), basePos.y(), yaw);
-                        RobotState.js_pos_des << basePos.x(), basePos.y(), basePos.z();
-                        RobotState.js_eul_des << 0.0, 0.0, yaw;
-                        weldHoldOptimizedStance = true;
-                        std::cout << "[WeldStance] confirmed optimized qpos before closed-loop" << std::endl;
+                        simRealRampStartPos = simRealLastPublishedPos;
                     }
-                    WBC_solv.fe_l_pos_des_W = RobotState.fe_l_pos_W;
-                    WBC_solv.fe_r_pos_des_W = RobotState.fe_r_pos_W;
-                    WBC_solv.fe_l_rot_des_W = RobotState.fe_l_rot_W;
-                    WBC_solv.fe_r_rot_des_W = RobotState.fe_r_rot_W;
-                    WBC_solv.pCoMDes = weldHoldOptimizedStance ? weldStanceCoM_W : RobotState.pCoM_W;
-                    openLoopPhaseActive = false;
-                    stopToStandPending = false;
-                    RobotState.motionState = DataBus::Stand;
-                    jsInterp.setIniPos(RobotState.q(0), RobotState.q(1), RobotState.base_rpy(2));
-                    jsInterp.setVxDesLPara(0.0, controllerConfig.vxStopRampTime);
-                    jsInterp.setVyDesLPara(0.0, controllerConfig.vxStopRampTime);
-                    jsInterp.setWzDesLPara(0.0, controllerConfig.wzStopRampTime);
-                    std::cout << "[OpenLoop] closed-loop enabled at t=" << simTime << " s" << std::endl;
+                    simRealRampElapsed = 0.0;
+                    simRealCommandPubCount = simRealCommandPubDecimation - 1;
+                    simRealCommandPublishEnabled = true;
+                    if (simRealCommandSafety)
+                    {
+                        simRealCommandSafety->resetCommandHistory();
+                    }
+                    std::cout << "[PublishGate-V4SimOpenLoop] real command publishing enabled by P, topic="
+                              << controllerConfig.rosTopicActionCmd
+                              << ", motionState=" << motionStateName(RobotState.motionState)
+                              << ", ramp_start=" << (hasLastCommand ? "last command" : "zero command")
+                              << ", real command initial ramp_time=" << realCommandInitialRampTimeSec
+                              << " s" << std::endl;
                 }
+            }
+            if (buttonState.key_g && openLoopPhaseActive)
+            {
+                std::cout << "[Weld] G ignored in open-loop: press F first to enter closed-loop Stand."
+                          << std::endl;
+            }
+            if (buttonState.key_f && openLoopPhaseActive)
+            {
+                WBC_solv.fe_l_pos_des_W = RobotState.fe_l_pos_W;
+                WBC_solv.fe_r_pos_des_W = RobotState.fe_r_pos_W;
+                WBC_solv.fe_l_rot_des_W = RobotState.fe_l_rot_W;
+                WBC_solv.fe_r_rot_des_W = RobotState.fe_r_rot_W;
+                WBC_solv.pCoMDes = weldHoldOptimizedStance ? weldStanceCoM_W : RobotState.pCoM_W;
+                openLoopPhaseActive = false;
+                stopToStandPending = false;
+                RobotState.motionState = DataBus::Stand;
+                jsInterp.setIniPos(RobotState.q(0), RobotState.q(1), RobotState.base_rpy(2));
+                jsInterp.setVxDesLPara(0.0, controllerConfig.vxStopRampTime);
+                jsInterp.setVyDesLPara(0.0, controllerConfig.vxStopRampTime);
+                jsInterp.setWzDesLPara(0.0, controllerConfig.wzStopRampTime);
+                std::cout << "[Mode] F: OpenLoop -> closed-loop Stand at t="
+                          << simTime << " s" << std::endl;
             }
             if (!openLoopPhaseActive)
             {
-                if (buttonState.key_space && RobotState.motionState == DataBus::Stand)
+                if (buttonState.key_space && realWeldStanceRampActive)
+                {
+                    std::cout << "[Mode] Space ignored: wait for weld stance real command ramp to finish."
+                              << std::endl;
+                }
+                else if (buttonState.key_space && RobotState.motionState == DataBus::Stand)
                 {
                     gaitScheduler.start();
                     jsInterp.setIniPos(RobotState.q(0), RobotState.q(1), RobotState.base_rpy(2));
                     weldHoldOptimizedStance = false;
                     RobotState.motionState = DataBus::Walk;
+                    std::cout << "[Mode] Space: Stand -> Walk at t=" << simTime << " s" << std::endl;
                 }
                 else if (buttonState.key_space && RobotState.motionState == DataBus::Walk)
                 {
@@ -1973,6 +2394,8 @@ int main(int argc, char **argv)
                     jsInterp.setVxDesLPara(0.0, controllerConfig.vxStopRampTime);
                     jsInterp.setWzDesLPara(0.0, controllerConfig.wzStopRampTime);
                     stopToStandPending = true;
+                    std::cout << "[Mode] Space: Walk stop ramp requested at t="
+                              << simTime << " s" << std::endl;
                 }
 
                 if (buttonState.key_a &&
@@ -2072,54 +2495,76 @@ int main(int argc, char **argv)
                     {
                         if (!weldWorkpieceActivated)
                         {
-                            std::cerr << "[Weld] cannot start: workpiece randomization has not run yet."
-                                      << std::endl;
-                        }
-                        else if (weldTrajectoryReady)
-                        {
-                            if (!weldStanceReady)
+                            weldTaskRequested = true;
+                            weldStartPromptPrinted = false;
+                            std::cout << "[Weld] G: preparation requested at t=" << simTime
+                                      << " s; randomizing workpiece and preparing stance." << std::endl;
+                            activateWeldWorkpiece(simTime);
+                            if (!weldTrajectoryReady)
                             {
-                                if (weldStanceSearchRunning || weldStanceTransitionActive)
-                                {
-                                    std::cerr << "[Weld] cannot start: weld stance search/visual transition is still running."
-                                              << std::endl;
-                                }
-                                else
-                                {
-                                    std::cerr << "[Weld] cannot start: no valid auto stance. "
-                                              << "Use WELD_STANCE_MODE=nominal to debug the legacy pose." << std::endl;
-                                }
+                                std::cerr << "[Weld] preparation failed: " << weldLoadErr << std::endl;
+                            }
+                            else if (weldStanceSearchRunning || weldStanceTransitionActive || !weldStanceReady)
+                            {
+                                std::cout << "[Weld] preparing: waiting for weld stance search/visual transition."
+                                          << std::endl;
                             }
                             else
                             {
-                                weldActive = false;
-                                weldPreparing = true;
-                                weldHolding = false;
-                                weldRecovering = false;
-                                finishWeldAfterControl = false;
-                                weldPrepareStartTime = simTime;
-                                weldPrepareReadySince = -1.0;
-                                weldPrepareStartTcpPos_W = RobotState.hd_r_pos_W;
-                                weldRecoverTargetTcp_W = weldPreApproachTcp_W;
-                                weldRecoverTargetRot_W = weldTrajectory.sample(0.0).pose.quat.toRotationMatrix();
-                                weldCoMDes = (weldStanceAuto && weldReapplyOnCloseLoop) ? weldStanceCoM_W : RobotState.pCoM_W;
-                                weldHoldOptimizedStance = weldStanceAuto && weldReapplyOnCloseLoop;
-                                RobotState.motionState = DataBus::WeldPrepare;
-                                RobotState.weld_active = false;
-                                RobotState.weld_recover_phase = 0.0;
-                                jsInterp.setIniPos(RobotState.q(0), RobotState.q(1), RobotState.base_rpy(2));
-                                std::cout << "[WeldPrepare] started at t=" << simTime
-                                          << " s using " << weldTrajectory.path() << std::endl;
+                                maybePrintWeldReadyPrompt();
+                            }
+                        }
+                        else if (!weldTrajectoryReady)
+                        {
+                            std::cerr << "[Weld] cannot start: " << weldLoadErr << std::endl;
+                        }
+                        else if (!weldStanceReady || weldStanceSearchRunning ||
+                                 weldStanceTransitionActive || realWeldStanceRampActive)
+                        {
+                            weldTaskRequested = true;
+                            if (weldStanceSearchRunning || weldStanceTransitionActive)
+                            {
+                                std::cout << "[Weld] preparing: weld stance search/visual transition is still running."
+                                          << std::endl;
+                            }
+                            else if (realWeldStanceRampActive)
+                            {
+                                std::cout << "[Weld] preparing: real command weld stance ramp is still running."
+                                          << std::endl;
+                            }
+                            else
+                            {
+                                std::cerr << "[Weld] cannot start: no valid auto stance. "
+                                          << "Use WELD_STANCE_MODE=nominal to debug the legacy pose." << std::endl;
                             }
                         }
                         else
                         {
-                            std::cerr << "[Weld] cannot start: " << weldLoadErr << std::endl;
+                            weldTaskRequested = true;
+                            weldStartPromptPrinted = false;
+                            weldActive = false;
+                            weldPreparing = true;
+                            weldHolding = false;
+                            weldRecovering = false;
+                            finishWeldAfterControl = false;
+                            weldPrepareStartTime = simTime;
+                            weldPrepareReadySince = -1.0;
+                            weldPrepareStartTcpPos_W = RobotState.hd_r_pos_W;
+                            weldRecoverTargetTcp_W = weldPreApproachTcp_W;
+                            weldRecoverTargetRot_W = weldTrajectory.sample(0.0).pose.quat.toRotationMatrix();
+                            weldCoMDes = (weldStanceAuto && weldReapplyOnCloseLoop) ? weldStanceCoM_W : RobotState.pCoM_W;
+                            weldHoldOptimizedStance = weldStanceAuto && weldReapplyOnCloseLoop;
+                            RobotState.motionState = DataBus::WeldPrepare;
+                            RobotState.weld_active = false;
+                            RobotState.weld_recover_phase = 0.0;
+                            jsInterp.setIniPos(RobotState.q(0), RobotState.q(1), RobotState.base_rpy(2));
+                            std::cout << "[WeldPrepare] started by G at t=" << simTime
+                                      << " s using " << weldTrajectory.path() << std::endl;
                         }
                     }
                     else
                     {
-                        std::cout << "[Weld] G ignored: return to Stand before welding" << std::endl;
+                        std::cout << "[Weld] G ignored: return to Stand before welding." << std::endl;
                     }
                 }
 
@@ -2187,6 +2632,7 @@ int main(int argc, char **argv)
                 RobotState.motors_pos_des = eigen2std(qIniFixedDes);
                 RobotState.motors_vel_des = motors_vel_des;
                 RobotState.motors_tor_des = motors_tau_des;
+                publishV4SimRealCommand(simTime);
                 pvtCtr.dataBusRead(RobotState);
                 pvtCtr.calMotorsPVT(110.0 / 1000.0 / 180.0 * 3.1415);
                 pvtCtr.dataBusWrite(RobotState);
@@ -2567,6 +3013,8 @@ int main(int argc, char **argv)
                 RobotState.motors_tor_des = eigen2std(RobotState.wbc_tauJointRes);
             }
 
+            publishV4SimRealCommand(simTime);
+
             // joint PVT controller
             pvtCtr.dataBusRead(RobotState);
             if (openLoopPhaseActive)
@@ -2705,27 +3153,15 @@ int main(int argc, char **argv)
             }
         }
 
-        if (mj_data->time >= simEndTime)
+        if (finiteSimDuration && mj_data->time >= simEndTime)
         {
-            const bool weldAutoTestPending =
-                weldAutoTest &&
-                ((!weldWorkpieceActivated && nominalWeldTrajectoryReady) ||
-                 weldStanceSearchRunning || weldStanceTransitionActive || isWeldMotionState(RobotState.motionState) ||
-                 (weldTrajectoryReady && (!weldAutoTestSentF || !weldAutoTestSentG) &&
-                  (weldStanceReady || !weldStanceSearchDone)));
-            if (!weldAutoTestPending || mj_data->time >= simEndTime + 60.0)
-            {
-                if (weldAutoTestPending)
-                {
-                    std::cerr << "[WeldAutoTest] warning: forced stop while weld pipeline still pending at t="
-                              << mj_data->time << " s" << std::endl;
-                }
-                break;
-            }
+            mujocoExitReason = "headless sim_end reached";
+            break;
         }
 
         uiController.updateScene();
     };
+    std::cout << "[MuJoCo] exit: " << mujocoExitReason << " at t=" << simTime << " s" << std::endl;
     uiController.Close();
 
     return 0;

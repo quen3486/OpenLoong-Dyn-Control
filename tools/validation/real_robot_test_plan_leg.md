@@ -1,6 +1,6 @@
 # speedbot_v4_leg 真机测试计划
 
-本文目标：使用唯一真机启动流程验证输入链路、G 发布门控、闭环站立和低速行走安全性。
+本文目标：使用唯一真机启动流程验证输入链路、P 发布门控、闭环站立和低速行走安全性。
 
 控制流基线：
 `/imu/data + /joint_states -> ROS2_interface_v4_leg::dataBusWrite -> StateEst/Pin_KinDyn -> 状态机 -> MPC/WBC -> /rl_motion_control_command`
@@ -15,7 +15,7 @@ cmake --build build -j4
 
 通过门槛：
 - 构建成功。
-- 合约检查 PASS，包含 69 长度动作话题、G 门控、默认停发、PVT 合力矩安全阈值、JSON/URDF limit 一致性。
+- 合约检查 PASS，包含 69 长度动作话题、P 门控、默认停发、PVT 合力矩安全阈值、JSON/URDF limit 一致性。
 
 ## 阶段 R1：只订阅启动
 
@@ -23,7 +23,7 @@ cmake --build build -j4
 ./tools/start_control_v4_leg.sh
 ```
 
-脚本固定为 `ros2_real + leg`，只启动 MPC 真机控制进程。可视化由控制器工程负责。启动后不要按 `G`。
+脚本固定为 `ros2_real + leg`，只启动 MPC 真机控制进程。可视化由控制器工程负责。启动后不要按 `P`。
 
 检查：
 - `ros2 topic hz /imu/data`
@@ -34,8 +34,8 @@ cmake --build build -j4
 ## 阶段 R2：开环发布与落地
 
 1. 机器人悬吊或安全支撑，电机处于低风险状态。
-2. 按 `G` 开始发布动作命令。
-3. 确认输出为 69 长度，布局为 `[pos23][vel23][torque23]`；初始开环站姿下速度和力矩前馈应接近 0，腰和手臂段为默认/零值。
+2. 按 `P` 开始发布动作命令。
+3. 确认输出为 69 长度，布局为 `[pos23][vel23][torque23]`；初始开环站姿下速度和力矩前馈为 0，腰和手臂段为默认/零值。
 4. 缓慢落地轻载，确认关节方向、IMU 朝向、双脚接触和姿态稳定。
 
 若出现位置、速度、PVT 合力矩或姿态超限，控制器会立即停发控制消息；此时停止进程并人工检查，不做在线恢复。

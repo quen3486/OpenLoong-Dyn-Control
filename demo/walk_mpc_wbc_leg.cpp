@@ -6,7 +6,7 @@
  *   69-value [pos23][vel23][torque23] commands for real-robot open-loop checks.
  *
  * Direct execution runs MuJoCo. Use --ros2-real for the real-robot backend,
- * or --sim-real-openloop to mirror MuJoCo MPC/WBC commands to ROS2 after G.
+ * or --sim-real-openloop to mirror MuJoCo MPC/WBC commands to ROS2 after P.
  */
 #include <mujoco/mujoco.h>
 #include <GLFW/glfw3.h>
@@ -116,83 +116,6 @@ bool hasArg(int argc, char **argv, const char *target)
         }
     }
     return false;
-}
-
-struct MujocoRegressionScript
-{
-    bool enabled{false};
-    double tCloseLoop{5.0};
-    double tWalkStart{10.0};
-    double tPressW{10.2};
-    double tPressJ{26.0};
-    double simEndTime{30.0};
-
-    bool sentF{false};
-    bool sentSpace{false};
-    bool sentW{false};
-    bool sentJ{false};
-
-    void inject(double simTime, UIctr::ButtonState &button)
-    {
-        if (!enabled)
-        {
-            return;
-        }
-
-        if (!sentF && simTime >= tCloseLoop)
-        {
-            button.key_f = true;
-            sentF = true;
-            std::cout << "[AutoRegression] press F at t=" << simTime << " s" << std::endl;
-        }
-        if (!sentSpace && simTime >= tWalkStart)
-        {
-            button.key_space = true;
-            sentSpace = true;
-            std::cout << "[AutoRegression] press Space at t=" << simTime << " s" << std::endl;
-        }
-        if (!sentW && simTime >= tPressW)
-        {
-            button.key_w = true;
-            sentW = true;
-            std::cout << "[AutoRegression] press W at t=" << simTime << " s" << std::endl;
-        }
-        if (!sentJ && simTime >= tPressJ)
-        {
-            button.key_j = true;
-            sentJ = true;
-            std::cout << "[AutoRegression] press J at t=" << simTime << " s" << std::endl;
-        }
-    }
-};
-
-MujocoRegressionScript loadMujocoRegressionScriptFromEnv()
-{
-    MujocoRegressionScript script;
-    parseBoolEnv(std::getenv("MUJOCO_REGRESSION_SCRIPT"), script.enabled);
-
-    double tmp = 0.0;
-    if (parseDoubleEnv(std::getenv("MUJOCO_REGRESSION_SIM_END"), tmp))
-    {
-        script.simEndTime = std::clamp(tmp, 10.0, 300.0);
-    }
-    if (parseDoubleEnv(std::getenv("MUJOCO_REGRESSION_CLOSE_LOOP_T"), tmp))
-    {
-        script.tCloseLoop = std::clamp(tmp, 0.5, script.simEndTime - 5.0);
-    }
-    if (parseDoubleEnv(std::getenv("MUJOCO_REGRESSION_WALK_START_T"), tmp))
-    {
-        script.tWalkStart = std::clamp(tmp, script.tCloseLoop + 0.5, script.simEndTime - 3.0);
-    }
-    if (parseDoubleEnv(std::getenv("MUJOCO_REGRESSION_STOP_T"), tmp))
-    {
-        script.tPressJ = std::clamp(tmp, script.tWalkStart + 6.0, script.simEndTime - 0.5);
-    }
-
-    const double walkBase = script.tWalkStart;
-    script.tPressW = walkBase + 0.2;
-
-    return script;
 }
 
 void configureCommonLegModules(const ControllerConfig &controllerConfig,
@@ -780,6 +703,8 @@ public:
                     buttonState.key_f = true;
                 else if (k == 'g')
                     buttonState.key_g = true;
+                else if (k == 'p')
+                    buttonState.key_p = true;
                 continue;
             }
 
@@ -1566,6 +1491,7 @@ int runMujoco(const ControllerConfig &controllerConfig, bool simRealOpenloopRequ
     bool simRealCommandSafetyStopped = false;
     int simRealCommandPubCount = 0;
     const int simRealCommandPubDecimation = std::max(1, static_cast<int>(std::lround(controllerConfig.simRosPublishDt / mainCtrlDt)));
+    const double realCommandInitialRampTimeSec = 3.0;
     std::vector<double> simRealLastPublishedPos;
     std::vector<double> simRealLastPublishedVel;
     std::vector<double> simRealLastPublishedTau;
@@ -1599,7 +1525,7 @@ int runMujoco(const ControllerConfig &controllerConfig, bool simRealOpenloopRequ
         std::cout << "[ROS2-OpenLoop] ready, publish_dt=" << simRealCommandPubDecimation * mainCtrlDt
                   << " s, action_topic=" << controllerConfig.rosTopicActionCmd << std::endl;
         std::cout << "[Command-SimOpenLoop] temporary publish mode: publishes 69-value command; non-leg joints use default/zero." << std::endl;
-        std::cout << "[PublishGate-SimOpenLoop] startup publishes nothing. Press G to start/stop real command publishing." << std::endl;
+        std::cout << "[PublishGate-SimOpenLoop] startup publishes nothing. Press P to start/stop real command publishing." << std::endl;
     }
 
     const bool headlessMode = std::getenv("HEADLESS") != nullptr;
@@ -1613,7 +1539,7 @@ int runMujoco(const ControllerConfig &controllerConfig, bool simRealOpenloopRequ
     std::cout << "[OpenLoop] press F to enable closed-loop walk control." << std::endl;
     if (simRealOpenloopEnabled)
     {
-        std::cout << "[Key-SimOpenLoop] G(publish real command on/off) F(sim closed-loop) Space(stand/walk) W/S/A/D(move) Q/E(speed) J(stop) H(reset yaw)" << std::endl;
+        std::cout << "[Key-SimOpenLoop] P(publish real command on/off) F(sim closed-loop) Space(stand/walk) W/S/A/D(move) Q/E(speed) J(stop) H(reset yaw)" << std::endl;
     }
 
     double stand_legLength = 0.95;
@@ -1630,16 +1556,6 @@ int runMujoco(const ControllerConfig &controllerConfig, bool simRealOpenloopRequ
     if (autoWalkEnabled)
     {
         std::cout << "[AutoWalk] enabled, speed=" << autoWalkSpeed << " m/s" << std::endl;
-    }
-    MujocoRegressionScript regressionScript = loadMujocoRegressionScriptFromEnv();
-    if (regressionScript.enabled)
-    {
-        std::cout << "[AutoRegression] enabled"
-                  << " (straight walking: F -> Space -> W -> J)"
-                  << ", close_loop_t=" << regressionScript.tCloseLoop
-                  << ", walk_start_t=" << regressionScript.tWalkStart
-                  << ", stop_t=" << regressionScript.tPressJ
-                  << ", sim_end_t=" << regressionScript.simEndTime << std::endl;
     }
 
     configureCommonLegModules(controllerConfig, gaitScheduler, footPlacement, WBC_solv, RobotState, stand_legLength);
@@ -1672,12 +1588,12 @@ int runMujoco(const ControllerConfig &controllerConfig, bool simRealOpenloopRequ
     std::vector<double> truthJointTor;
 
     bool openLoopPhaseActive = true;
-    const bool finiteSimDuration = headlessMode || regressionScript.enabled;
-    const double simEndTime = regressionScript.enabled ? regressionScript.simEndTime : 200.0;
+    const bool finiteSimDuration = headlessMode;
+    const double simEndTime = 200.0;
     if (finiteSimDuration)
     {
         std::cout << "[MuJoCo] finite run enabled, sim_end_t=" << simEndTime
-                  << " s, reason=" << (regressionScript.enabled ? "regression" : "headless") << std::endl;
+                  << " s, reason=headless" << std::endl;
     }
     else
     {
@@ -1744,7 +1660,7 @@ int runMujoco(const ControllerConfig &controllerConfig, bool simRealOpenloopRequ
         }
         if (finiteSimDuration && simTime >= simEndTime)
         {
-            mujocoExitReason = regressionScript.enabled ? "regression sim_end reached" : "headless sim_end reached";
+            mujocoExitReason = "headless sim_end reached";
             break;
         }
 
@@ -1771,12 +1687,11 @@ int runMujoco(const ControllerConfig &controllerConfig, bool simRealOpenloopRequ
             }
 
             buttonState = uiController.getButtonState();
-            regressionScript.inject(simTime, buttonState);
-            if (simRealOpenloopEnabled && buttonState.key_g)
+            if (simRealOpenloopEnabled && buttonState.key_p)
             {
                 if (simRealCommandSafetyStopped)
                 {
-                    std::cerr << "[PublishGate-SimOpenLoop] G ignored after safety stop. Please restart manually." << std::endl;
+                    std::cerr << "[PublishGate-SimOpenLoop] P ignored after safety stop. Please restart manually." << std::endl;
                 }
                 else if (simRealCommandPublishEnabled)
                 {
@@ -1785,7 +1700,7 @@ int runMujoco(const ControllerConfig &controllerConfig, bool simRealOpenloopRequ
                     {
                         simRealCommandSafety->resetCommandHistory();
                     }
-                    std::cout << "[PublishGate-SimOpenLoop] real command publishing stopped by G, topic="
+                    std::cout << "[PublishGate-SimOpenLoop] real command publishing stopped by P, topic="
                               << controllerConfig.rosTopicActionCmd << std::endl;
                 }
                 else
@@ -1809,11 +1724,12 @@ int runMujoco(const ControllerConfig &controllerConfig, bool simRealOpenloopRequ
                     {
                         simRealCommandSafety->resetCommandHistory();
                     }
-                    std::cout << "[PublishGate-SimOpenLoop] real command publishing enabled by G, topic="
+                    std::cout << "[PublishGate-SimOpenLoop] real command publishing enabled by P, topic="
                               << controllerConfig.rosTopicActionCmd
                               << ", ramp_start="
                               << (hasLastLegCommand ? "last leg command" : "zero command")
-                              << ", ramp_time=" << controllerConfig.autoStartRampTime << " s" << std::endl;
+                              << ", real command initial ramp_time=" << realCommandInitialRampTimeSec
+                              << " s" << std::endl;
                 }
             }
             applyLegControlStateMachine(controllerConfig, buttonState, RobotState, jsInterp, gaitScheduler,
@@ -1842,7 +1758,7 @@ int runMujoco(const ControllerConfig &controllerConfig, bool simRealOpenloopRequ
                     std::vector<double> publishPos = targetPos;
                     std::vector<double> publishVel = targetVel;
                     std::vector<double> publishTau = targetTau;
-                    const double rampTime = std::max(controllerConfig.autoStartRampTime, mainCtrlDt);
+                    const double rampTime = std::max(realCommandInitialRampTimeSec, mainCtrlDt);
                     if (simRealRampElapsed < rampTime)
                     {
                         const double ratio = std::clamp(simRealRampElapsed / rampTime, 0.0, 1.0);
@@ -1907,7 +1823,7 @@ int runMujoco(const ControllerConfig &controllerConfig, bool simRealOpenloopRequ
 
         if (finiteSimDuration && simTime >= simEndTime)
         {
-            mujocoExitReason = regressionScript.enabled ? "regression sim_end reached" : "headless sim_end reached";
+            mujocoExitReason = "headless sim_end reached";
             break;
         }
 
@@ -2002,10 +1918,10 @@ int runRos2Real(const ControllerConfig &controllerConfig)
     const double turnRateCmd = controllerConfig.turnRateCmd;
     const std::vector<double> zeroVelCmd(12, 0.0);
     const std::vector<double> zeroTauCmd(12, 0.0);
-    std::cout << "[PublishGate-Real] startup is subscribe-only. Press G to start/stop control publishing." << std::endl;
-    std::cout << "[OpenLoop-Real] after G starts publishing, press F to enable closed-loop stand control." << std::endl;
+    std::cout << "[PublishGate-Real] startup is subscribe-only. Press P to start/stop control publishing." << std::endl;
+    std::cout << "[OpenLoop-Real] after P starts publishing, press F to enable closed-loop stand control." << std::endl;
     std::cout << "[Command-Real] temporary publish mode: publishes 69-value command; non-leg joints use default/zero." << std::endl;
-    std::cout << "[Key-Real] G(publish on/off) F(closed-loop) Space(stand/walk) W/S/A/D(move) Q/E(speed) J(stop) H(reset yaw)" << std::endl;
+    std::cout << "[Key-Real] P(publish on/off) F(closed-loop) Space(stand/walk) W/S/A/D(move) Q/E(speed) J(stop) H(reset yaw)" << std::endl;
 
     TerminalKeyReader terminalKeyReader;
     std::string terminalErr;
@@ -2051,16 +1967,16 @@ int runRos2Real(const ControllerConfig &controllerConfig)
 
         ros2Interface.spinSome();
         buttonState = terminalKeyReader.poll();
-        if (buttonState.key_g)
+        if (buttonState.key_p)
         {
             if (safetyStopped)
             {
-                std::cerr << "[PublishGate-Real] G ignored after safety stop. Please restart manually." << std::endl;
+                std::cerr << "[PublishGate-Real] P ignored after safety stop. Please restart manually." << std::endl;
             }
             else if (publishEnabled)
             {
                 forceSubscribeOnlyStand();
-                std::cout << "[PublishGate-Real] control publishing stopped by G." << std::endl;
+                std::cout << "[PublishGate-Real] control publishing stopped by P." << std::endl;
             }
             else
             {
@@ -2071,7 +1987,7 @@ int runRos2Real(const ControllerConfig &controllerConfig)
                 jsInterp.reset();
                 safetyMonitor.resetCommandHistory();
                 commandBlender.reset();
-                std::cout << "[PublishGate-Real] control publishing enabled by G. Open-loop stand command active." << std::endl;
+                std::cout << "[PublishGate-Real] control publishing enabled by P. Open-loop stand command active." << std::endl;
             }
         }
 

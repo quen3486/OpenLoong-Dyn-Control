@@ -332,8 +332,8 @@ check_pattern "$ROS_IF" 'topicActionCmd_ = config\.rosTopicActionCmd' "ROS2接�
 check_pattern "$ROS_IF" 'kCommandJointCount = 23' "动作发布关节数为23"
 check_pattern "$ROS_IF" 'kCommandSize == 69' "动作发布长度为69([pos23][vel23][torque23])"
 check_pattern "$ROS_IF" 'msg\.data\.assign\(kCommandSize, 0\.0\)' "动作发布按69长度初始化"
-check_pattern "$ROS_IF" 'msg\.data\[kCommandJointCount \+ i\] = dqDesIn\[i\]' "腿部期望速度写入动作第二段"
-check_pattern "$ROS_IF" 'msg\.data\[2 \* kCommandJointCount \+ i\] = tauFfIn\[i\]' "腿部力矩前馈写入动作第三段"
+check_pattern "$ROS_IF" 'msg\.data\[13 \+ i\] = qDesIn\[12 \+ i\]' "V4左臂位置跳过waist_yaw后写入动作位置段"
+check_pattern "$ROS_IF" 'msg\.data\[18 \+ i\] = qDesIn\[17 \+ i\]' "V4右臂位置跳过waist_yaw后写入动作位置段"
 
 if [[ -f "$ROS_CONTROLLER_FILE" ]]; then
   check_pattern "$ROS_CONTROLLER_FILE" 'kControlledJointCount = 23' "mit_controller订阅端固定23关节"
@@ -362,7 +362,7 @@ else
   echo "[SKIP] 未提供msg样本，跳过真机joint_states顺序样本核对"
 fi
 
-check_pattern "$DEMO_FILE" 'buttonState\.key_g' "真机终端G键发布门控"
+check_pattern "$DEMO_FILE" 'buttonState\.key_p' "真机终端P键发布门控"
 check_pattern "$DEMO_FILE" 'bool publishEnabled = false' "ros2_real默认不发布控制消息"
 check_pattern "$DEMO_FILE" 'stopPublishingForSafety' "安全超限后停发控制消息"
 check_no_pattern "$DEMO_FILE" 'ROS2_StatePub|ROS2_state_pub|sim_enable_ros2_state_pub|simEnableRos2StatePub' "leg demo不再发布MuJoCo ROS2可视化状态"

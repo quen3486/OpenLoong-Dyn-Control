@@ -12,6 +12,7 @@
 namespace
 {
 constexpr size_t kLegJointCount = 12;
+constexpr size_t kV4JointCount = 22;
 constexpr size_t kCommandJointCount = 23;
 constexpr size_t kCommandSections = 3;
 constexpr size_t kCommandSize = kCommandJointCount * kCommandSections;
@@ -45,6 +46,22 @@ constexpr std::array<double, kCommandJointCount> kDefaultCommandPosition{{0.0}};
 
 static_assert(kCommandJointOrder.size() == kCommandJointCount, "command joint order size mismatch");
 static_assert(kCommandSize == 69, "speedbot_v4 real command contract must stay 69 values");
+
+bool hasFinitePrefix(const std::vector<double> &values, size_t count)
+{
+    if (values.size() < count)
+    {
+        return false;
+    }
+    for (size_t i = 0; i < count; i++)
+    {
+        if (!std::isfinite(values[i]))
+        {
+            return false;
+        }
+    }
+    return true;
+}
 } // namespace
 
 const std::array<std::string, 12> ROS2_Interface_V4_Leg::kJointNamesPinOrder = {
@@ -120,7 +137,7 @@ bool ROS2_Interface_V4_Leg::initializeCommandPublisherOnly(const ControllerConfi
         rclcpp::init(0, nullptr);
     }
 
-    node_ = std::make_shared<rclcpp::Node>("openloong_mpc_wbc_leg_sim_real_openloop_cmd");
+    node_ = std::make_shared<rclcpp::Node>("openloong_mpc_wbc_sim_real_openloop_cmd");
     actionCmdPub_ = node_->create_publisher<std_msgs::msg::Float64MultiArray>(topicActionCmd_, 20);
 
     executor_ = std::make_shared<rclcpp::executors::SingleThreadedExecutor>();
@@ -276,36 +293,23 @@ void ROS2_Interface_V4_Leg::setMotorsCommand(const std::vector<double> &qDesIn,
                                              const std::vector<double> &tauFfIn)
 {
 #if OPENLOONG_HAS_ROS2
+    (void)dqDesIn;
+    (void)tauFfIn;
     if (!isInitialized_ || actionCmdPub_ == nullptr)
     {
         return;
     }
 
-    auto validFirst12 = [](const std::vector<double> &values)
-    {
-        if (values.size() < kLegJointCount)
-        {
-            return false;
-        }
-        for (size_t i = 0; i < kLegJointCount; i++)
-        {
-            if (!std::isfinite(values[i]))
-            {
-                return false;
-            }
-        }
-        return true;
-    };
+    const bool hasLegCommand = hasFinitePrefix(qDesIn, kLegJointCount);
+    const bool hasV4Command = hasFinitePrefix(qDesIn, kV4JointCount);
 
-    if (!validFirst12(qDesIn) || !validFirst12(dqDesIn) || !validFirst12(tauFfIn))
+    if (!hasLegCommand)
     {
         const size_t warnCount = ++commandInvalidWarnCount_;
         if (warnCount == 1 || warnCount % 1000 == 0)
         {
-            std::cerr << "[ROS2] command publish skipped: expected finite leg vectors with at least 12 values each"
-                      << " to publish Float64MultiArray[69]=[pos23][vel23][torque23], got pos=" << qDesIn.size()
-                      << ", vel=" << dqDesIn.size()
-                      << ", torque=" << tauFfIn.size()
+            std::cerr << "[ROS2] command publish skipped: expected finite position vector with at least 12 values"
+                      << " for Float64MultiArray[69]=[pos23][vel23][torque23], got pos=" << qDesIn.size()
                       << ", topic=" << topicActionCmd_ << std::endl;
         }
         return;
@@ -320,8 +324,14 @@ void ROS2_Interface_V4_Leg::setMotorsCommand(const std::vector<double> &qDesIn,
     for (size_t i = 0; i < kLegJointCount; i++)
     {
         msg.data[i] = qDesIn[i];
-        msg.data[kCommandJointCount + i] = dqDesIn[i];
-        msg.data[2 * kCommandJointCount + i] = tauFfIn[i];
+    }
+    if (hasV4Command)
+    {
+        for (size_t i = 0; i < 5; i++)
+        {
+            msg.data[13 + i] = qDesIn[12 + i];
+            msg.data[18 + i] = qDesIn[17 + i];
+        }
     }
     actionCmdPub_->publish(msg);
 #else
