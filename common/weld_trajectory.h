@@ -28,6 +28,7 @@ public:
 
     bool loadCsv(const std::string &path, std::string *errMsg = nullptr);
     bool scalePathLength(double targetLength, std::string *errMsg = nullptr);
+    bool setSpeed(double speed, std::string *errMsg = nullptr);
     void applyTranslation(const Eigen::Vector3d &offset);
     Sample sample(double elapsedSec) const;
 

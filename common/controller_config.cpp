@@ -8,6 +8,7 @@ Feel free to use in any purpose, and cite OpenLoong-Dynamics-Control in any styl
 #include "controller_config.h"
 
 #include <algorithm>
+#include <cmath>
 #include <fstream>
 #include <sstream>
 #include "json/json.h"
@@ -137,6 +138,7 @@ bool loadControllerConfig(const std::string &jsonPath, ControllerConfig &outProf
     readOptionalDouble(root, "contact_miu", outProfile.contactMiu);
 
     readOptionalDouble(root, "weld_seam_length", outProfile.weldSeamLength);
+    readOptionalDouble(root, "weld_trajectory_speed", outProfile.weldTrajectorySpeed);
     readOptionalBool(root, "weld_workpiece_random_enabled", outProfile.weldWorkpieceRandomEnabled);
 
     readOptionalDouble(root, "mpc_mass", outProfile.mpcMass);
@@ -199,6 +201,7 @@ bool loadControllerConfig(const std::string &jsonPath, ControllerConfig &outProf
     outProfile.turnRateCmd = std::max(-3.0, std::min(3.0, outProfile.turnRateCmd));
     outProfile.contactMiu = std::clamp(outProfile.contactMiu, 0.01, 2.0);
     outProfile.weldSeamLength = std::max(outProfile.weldSeamLength, 0.01);
+    outProfile.weldTrajectorySpeed = std::max(outProfile.weldTrajectorySpeed, 0.001);
     outProfile.mpcMass = std::max(outProfile.mpcMass, 1.0);
     outProfile.mpcDeltaFootFront = std::max(outProfile.mpcDeltaFootFront, 1e-4);
     outProfile.mpcDeltaFootRear = std::max(outProfile.mpcDeltaFootRear, 1e-4);

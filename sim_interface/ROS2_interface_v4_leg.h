@@ -39,7 +39,8 @@ public:
     bool hasFreshData(double timeoutSec) const;
     bool getLatestCommandJointPositions(std::vector<double> &positions,
                                         double maxAgeSec,
-                                        std::string *errMsg = nullptr) const;
+                                        std::string *errMsg = nullptr,
+                                        double *ageSec = nullptr) const;
     size_t getActionSubscriptionCount() const;
 
     void dataBusWrite(DataBus &busIn);

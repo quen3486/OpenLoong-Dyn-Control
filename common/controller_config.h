@@ -85,6 +85,7 @@ struct ControllerConfig
 
     // Welding task
     double weldSeamLength{0.24};
+    double weldTrajectorySpeed{0.035};
     bool weldWorkpieceRandomEnabled{false};
 
     // MPC model / constraint params

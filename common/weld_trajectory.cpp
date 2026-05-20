@@ -182,6 +182,37 @@ bool WeldTrajectory::scalePathLength(double targetLength, std::string *errMsg)
     return true;
 }
 
+bool WeldTrajectory::setSpeed(double speed, std::string *errMsg)
+{
+    if (segments_.empty())
+    {
+        if (errMsg != nullptr)
+        {
+            *errMsg = "cannot set speed on empty weld trajectory";
+        }
+        return false;
+    }
+    if (speed <= 1.0e-8 || !std::isfinite(speed))
+    {
+        if (errMsg != nullptr)
+        {
+            *errMsg = "weld trajectory speed must be positive";
+        }
+        return false;
+    }
+    for (auto &seg : segments_)
+    {
+        seg.speed = speed;
+    }
+    recomputeTiming();
+
+    if (errMsg != nullptr)
+    {
+        errMsg->clear();
+    }
+    return true;
+}
+
 void WeldTrajectory::recomputeTiming()
 {
     double startTime = 0.0;

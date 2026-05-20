@@ -65,7 +65,8 @@
   "contact_miu": 0.7,            // 地面摩擦系数（统一用于MPC与WBC摩擦锥）
 
   // ===== 焊接任务 =====
-  "weld_seam_length": 0.4,       // 工件焊缝长度(m)，启动时按该长度缩放直线焊缝
+  "weld_seam_length": 0.35,       // 工件焊缝长度(m)，启动时按该长度缩放直线焊缝
+  "weld_trajectory_speed": 0.015, // 焊接进入/焊缝/退出统一TCP速度(m/s)
   "weld_workpiece_random_enabled": false, // 是否在第一次按G准备焊接时随机生成工件位置
 
   // ===== MPC机型参数与接触约束 =====

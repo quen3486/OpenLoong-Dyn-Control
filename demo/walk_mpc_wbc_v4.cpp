@@ -119,6 +119,10 @@ const std::array<std::string, 22> kV4CommandSourceJointNames = {
     "right_shoulder_pitch_joint", "right_shoulder_roll_joint", "right_shoulder_yaw_joint",
     "right_elbow_joint", "right_wrist_roll_joint"};
 
+constexpr size_t kRightArmJointCount = 5;
+constexpr size_t kV4RightArmSourceStart = 17;
+constexpr size_t kCommandRightArmStart = 18;
+
 bool mapCommandJointPositionsToV4Source(const std::vector<double> &commandPos23,
                                         std::vector<double> &sourcePos22,
                                         std::string *errMsg)
@@ -301,19 +305,96 @@ double smoothStep01(double x)
     return u * u * (3.0 - 2.0 * u);
 }
 
-double smoothStep01Dot(double x)
+double quinticStep01(double x)
 {
     const double u = std::clamp(x, 0.0, 1.0);
-    return 6.0 * u * (1.0 - u);
+    const double u2 = u * u;
+    const double u3 = u2 * u;
+    const double u4 = u3 * u;
+    const double u5 = u4 * u;
+    return 10.0 * u3 - 15.0 * u4 + 6.0 * u5;
 }
 
-double smoothStep01Ddot(double x)
+double quinticStep01Dot(double x)
+{
+    const double u = std::clamp(x, 0.0, 1.0);
+    const double u2 = u * u;
+    const double u3 = u2 * u;
+    const double u4 = u3 * u;
+    return 30.0 * u2 - 60.0 * u3 + 30.0 * u4;
+}
+
+double quinticStep01Ddot(double x)
 {
     if (x <= 0.0 || x >= 1.0)
     {
         return 0.0;
     }
-    return 6.0 - 12.0 * x;
+    const double u2 = x * x;
+    return 60.0 * x - 180.0 * u2 + 120.0 * u2 * x;
+}
+
+struct StraightTcpMotion
+{
+    WeldTrajectory::Pose start;
+    WeldTrajectory::Pose end;
+    double speed{0.035};
+    double length{0.0};
+    double duration{1.0e-3};
+    bool valid{false};
+};
+
+StraightTcpMotion makeStraightTcpMotion(const WeldTrajectory::Pose &start,
+                                        const WeldTrajectory::Pose &end,
+                                        double speed)
+{
+    StraightTcpMotion motion;
+    motion.start = start;
+    motion.end = end;
+    motion.speed = std::max(speed, 1.0e-3);
+    motion.length = (end.pos - start.pos).norm();
+    if (!std::isfinite(motion.length) || !std::isfinite(motion.speed))
+    {
+        motion.valid = false;
+        return motion;
+    }
+    motion.duration = std::max(motion.length / motion.speed, 1.0e-3);
+    motion.valid = true;
+    return motion;
+}
+
+WeldTrajectory::Sample sampleStraightTcpMotion(const StraightTcpMotion &motion, double elapsedSec)
+{
+    WeldTrajectory::Sample out;
+    if (!motion.valid)
+    {
+        return out;
+    }
+
+    const double duration = std::max(motion.duration, 1.0e-3);
+    const double localT = std::clamp(elapsedSec, 0.0, duration);
+    const double u = std::clamp(localT / duration, 0.0, 1.0);
+    const double s = quinticStep01(u);
+    const double dsDu = quinticStep01Dot(u);
+    const double d2sDu2 = quinticStep01Ddot(u);
+    const Eigen::Vector3d dp = motion.end.pos - motion.start.pos;
+
+    out.pose.pos = motion.start.pos + s * dp;
+    out.pose.quat = motion.start.quat.slerp(s, motion.end.quat).normalized();
+    out.linearVel = (dsDu / duration) * dp;
+    out.linearAcc = (d2sDu2 / (duration * duration)) * dp;
+    out.phase = s;
+    out.done = elapsedSec >= duration;
+    out.valid = true;
+    if (out.done)
+    {
+        out.pose = motion.end;
+        out.linearVel.setZero();
+        out.angularVel.setZero();
+        out.linearAcc.setZero();
+        out.angularAcc.setZero();
+    }
+    return out;
 }
 
 bool isWeldMotionState(DataBus::MotionState state)
@@ -517,10 +598,8 @@ constexpr double weldBaseZStabilityMin = 0.98;
 constexpr double weldPreApproachDistDefault = 0.08;
 constexpr double weldMinPreApproachClearanceDefault = 0.06;
 constexpr double weldHoldDurationDefault = 0.8;
-constexpr double weldRecoverDurationDefault = 3.0;
 constexpr double weldStanceTransitionDurationDefault = 5.0;
 constexpr double weldPrepareHoldTDefault = 0.2;
-constexpr double weldPrepareMaxTDefault = 3.0;
 constexpr double weldPrepareMinPhaseDefault = 0.95;
 constexpr double weldPrepareStartErrDefault = 0.002;
 constexpr double weldPrepareFallbackErrDefault = 0.002;
@@ -1482,6 +1561,8 @@ int main(int argc, char **argv)
     std::vector<double> realWeldStanceRampTarget(kV4CommandSourceJointNames.size(), 0.0);
     const std::vector<double> simRealZeroVel(kV4CommandSourceJointNames.size(), 0.0);
     const std::vector<double> simRealZeroTau(kV4CommandSourceJointNames.size(), 0.0);
+    std::vector<double> realRightArmCmdPos(kRightArmJointCount, 0.0);
+    bool realRightArmCommandPublished = false;
     Eigen::Matrix3d mpcInertiaCfg;
     mpcInertiaCfg << controllerConfig.mpcInertiaXx, controllerConfig.mpcInertiaXy, controllerConfig.mpcInertiaXz,
                      controllerConfig.mpcInertiaXy, controllerConfig.mpcInertiaYy, controllerConfig.mpcInertiaYz,
@@ -1551,6 +1632,11 @@ int main(int argc, char **argv)
     {
         nominalWeldTrajectoryReady = false;
     }
+    if (nominalWeldTrajectoryReady &&
+        !nominalWeldTrajectory.setSpeed(controllerConfig.weldTrajectorySpeed, &weldLoadErr))
+    {
+        nominalWeldTrajectoryReady = false;
+    }
     bool weldTrajectoryReady = false;
     RobotState.weld_trajectory_valid = weldTrajectoryReady;
     if (nominalWeldTrajectoryReady)
@@ -1560,7 +1646,8 @@ int main(int argc, char **argv)
         std::cout << "[WeldTrajectory] nominal loaded: " << nominalWeldTrajectory.path()
                   << ", segments=" << nominalWeldTrajectory.segmentCount()
                   << ", length=" << nominalWeldTrajectory.totalLength()
-                  << " m, duration=" << nominalWeldTrajectory.totalDuration() << " s" << std::endl;
+                  << " m, weld_trajectory_speed=" << controllerConfig.weldTrajectorySpeed
+                  << " m/s, duration=" << nominalWeldTrajectory.totalDuration() << " s" << std::endl;
         std::cout << "[WeldTrajectory] nominal path start/end: "
                   << weldStartSample.pose.pos.transpose() << " / "
                   << weldEndSample.pose.pos.transpose() << std::endl;
@@ -1572,7 +1659,6 @@ int main(int argc, char **argv)
     const double weldPreApproachDist = weldPreApproachDistDefault;
     const double weldMinPreApproachClearance = weldMinPreApproachClearanceDefault;
     const double weldHoldDuration = weldHoldDurationDefault;
-    const double weldRecoverDuration = weldRecoverDurationDefault;
     Eigen::Vector3d weldPreApproachTcp_W = Eigen::Vector3d::Zero();
     std::cout << "[WeldWorkpiece] startup: seam_length=" << weldWorkpiece.seamLength
               << " m, random_enabled=" << (weldWorkpiece.randomEnabled ? 1 : 0)
@@ -1582,7 +1668,7 @@ int main(int argc, char **argv)
     std::cout << "[Weld] preapproach=" << weldPreApproachDist
               << " m, min_clearance=" << weldMinPreApproachClearance
               << " m, hold=" << weldHoldDuration
-              << " s, recover=" << weldRecoverDuration << " s" << std::endl;
+              << " s, weld_trajectory_speed=" << controllerConfig.weldTrajectorySpeed << " m/s" << std::endl;
 
     // initialize UI: GLFW
     uiController.iniGLFW();
@@ -1973,6 +2059,9 @@ int main(int argc, char **argv)
             std::cout << "[WeldTrajectory] runtime path start/end: "
                       << weldStartSample.pose.pos.transpose() << " / "
                       << weldEndSample.pose.pos.transpose() << std::endl;
+            std::cout << "[WeldTrajectory] runtime length=" << weldTrajectory.totalLength()
+                      << " m, weld_trajectory_speed=" << controllerConfig.weldTrajectorySpeed
+                      << " m/s, duration=" << weldTrajectory.totalDuration() << " s" << std::endl;
             std::cout << "[Weld] runtime preapproach_tcp="
                       << weldPreApproachTcp_W.transpose()
                       << ", clearance=" << weldPreApproachClearance << " m" << std::endl;
@@ -2073,6 +2162,13 @@ int main(int argc, char **argv)
     logger.addIterm("weld_cop_margin", 1);
     logger.addIterm("weld_tau_margin", 1);
     logger.addIterm("weld_clearance_margin", 1);
+    logger.addIterm("real_right_arm_cmd_pos", 5);
+    logger.addIterm("real_right_arm_fb_pos", 5);
+    logger.addIterm("real_right_arm_track_err", 5);
+    logger.addIterm("real_right_arm_track_err_max_abs", 1);
+    logger.addIterm("real_right_arm_track_err_rms", 1);
+    logger.addIterm("real_right_arm_track_valid", 1);
+    logger.addIterm("real_right_arm_feedback_age", 1);
 
     logger.finishItermAdding();
 
@@ -2104,17 +2200,17 @@ int main(int argc, char **argv)
     double weldHoldStartTime = 0.0;
     double weldRecoverStartTime = 0.0;
     Eigen::Vector3d weldCoMDes = Eigen::Vector3d::Zero();
-    Eigen::Vector3d weldPrepareStartTcpPos_W = Eigen::Vector3d::Zero();
     Eigen::Vector3d weldFinalTcpPos_W = Eigen::Vector3d::Zero();
-    Eigen::Vector3d weldRecoverStartTcpPos_W = Eigen::Vector3d::Zero();
     Eigen::Vector3d weldRecoverTargetTcp_W = weldPreApproachTcp_W;
     Eigen::Vector3d weldBaseRef_W = Eigen::Vector3d::Zero();
     Eigen::Vector3d weldCoMRef_W = Eigen::Vector3d::Zero();
     Eigen::Vector3d weldBaseRpyRef = Eigen::Vector3d::Zero();
     Eigen::Matrix3d weldFinalTcpRot_W = Eigen::Matrix3d::Identity();
     Eigen::Matrix3d weldRecoverTargetRot_W = Eigen::Matrix3d::Identity();
+    StraightTcpMotion weldPrepareMotion;
+    StraightTcpMotion weldRetractMotion;
+    StraightTcpMotion weldRecoverMotion;
     const double weldPrepareHoldT = weldPrepareHoldTDefault;
-    const double weldPrepareMaxT = weldPrepareMaxTDefault;
     const double weldPrepareMinPhase = weldPrepareMinPhaseDefault;
     const double weldPrepareStartErr = weldPrepareStartErrDefault;
     const double weldPrepareFallbackErr = std::max(weldPrepareStartErr, weldPrepareFallbackErrDefault);
@@ -2148,12 +2244,12 @@ int main(int argc, char **argv)
         std::cout << "[MuJoCo] interactive run has no fixed simulation time limit." << std::endl;
     }
     std::cout << "[WeldPrepare] hold=" << weldPrepareHoldT
-              << " s, max=" << weldPrepareMaxT
               << " s, start_err=" << weldPrepareStartErr
               << " m, fallback_err=" << weldPrepareFallbackErr
               << " m, finish_err=" << weldTcpFinishErr
               << " m, finish_timeout=" << weldFinishTimeout
-              << " s, tcp_lookahead=" << weldTcpLookahead << " s" << std::endl;
+              << " s, tcp_lookahead=" << weldTcpLookahead
+              << " s, straight_speed=" << controllerConfig.weldTrajectorySpeed << " m/s" << std::endl;
 
     auto resetWeldStabilityMetrics = [&]()
     {
@@ -2221,6 +2317,7 @@ int main(int argc, char **argv)
         simRealCommandSafetyStopped = true;
         simRealCommandPublishEnabled = false;
         realWeldStanceRampActive = false;
+        realRightArmCommandPublished = false;
     };
 
     auto printRealPublishStateForWeld = [&](const std::string &event)
@@ -2333,6 +2430,11 @@ int main(int argc, char **argv)
         simRealCommandPub.setMotorsCommand(publishPos, simRealZeroVel, simRealZeroTau);
         simRealCommandPub.spinSome();
         simRealLastPublishedPos = publishPos;
+        for (size_t i = 0; i < kRightArmJointCount; i++)
+        {
+            realRightArmCmdPos[i] = publishPos[kV4RightArmSourceStart + i];
+        }
+        realRightArmCommandPublished = true;
         static int publishLogCount = 0;
         if (publishLogCount == 0 || publishLogCount % 500 == 0)
         {
@@ -2444,6 +2546,7 @@ int main(int argc, char **argv)
                 {
                     simRealCommandPublishEnabled = false;
                     realWeldStanceRampActive = false;
+                    realRightArmCommandPublished = false;
                     std::cout << "[PublishGate-V4SimOpenLoop] real command publishing stopped by P, topic="
                               << controllerConfig.rosTopicActionCmd << std::endl;
                 }
@@ -2682,27 +2785,55 @@ int main(int argc, char **argv)
                         }
                         else
                         {
-                            weldTaskRequested = true;
-                            weldStartPromptPrinted = false;
-                            weldActive = false;
-                            weldPreparing = true;
-                            weldHolding = false;
-                            weldRecovering = false;
-                            finishWeldAfterControl = false;
-                            weldPrepareStartTime = simTime;
-                            weldPrepareReadySince = -1.0;
-                            weldPrepareStartTcpPos_W = RobotState.hd_r_pos_W;
-                            weldRecoverTargetTcp_W = weldPreApproachTcp_W;
-                            weldRecoverTargetRot_W = weldTrajectory.sample(0.0).pose.quat.toRotationMatrix();
-                            weldCoMDes = (weldStanceAuto && weldReapplyOnCloseLoop) ? weldStanceCoM_W : RobotState.pCoM_W;
-                            weldHoldOptimizedStance = weldStanceAuto && weldReapplyOnCloseLoop;
-                            RobotState.motionState = DataBus::WeldPrepare;
-                            RobotState.weld_active = false;
-                            RobotState.weld_recover_phase = 0.0;
-                            jsInterp.setIniPos(RobotState.q(0), RobotState.q(1), RobotState.base_rpy(2));
-                            std::cout << "[WeldPrepare] started by G at t=" << simTime
-                                      << " s using " << weldTrajectory.path() << std::endl;
-                            printRealPublishStateForWeld("WeldPrepare started");
+                            const auto weldStartSample = weldTrajectory.sample(0.0);
+                            WeldTrajectory::Pose prepareStartPose;
+                            prepareStartPose.pos = RobotState.hd_r_pos_W;
+                            prepareStartPose.quat = Eigen::Quaterniond(RobotState.hd_r_rot_W);
+                            const double prepareQuatNorm = prepareStartPose.quat.norm();
+                            if (!std::isfinite(prepareQuatNorm) || prepareQuatNorm < 1.0e-8)
+                            {
+                                prepareStartPose.quat = Eigen::Quaterniond::Identity();
+                            }
+                            else
+                            {
+                                prepareStartPose.quat.normalize();
+                            }
+                            weldPrepareMotion = makeStraightTcpMotion(prepareStartPose,
+                                                                      weldStartSample.pose,
+                                                                      controllerConfig.weldTrajectorySpeed);
+                            if (!weldPrepareMotion.valid)
+                            {
+                                std::cerr << "[WeldPrepare] cannot start: invalid straight TCP motion." << std::endl;
+                            }
+                            else
+                            {
+                                weldTaskRequested = true;
+                                weldStartPromptPrinted = false;
+                                weldActive = false;
+                                weldPreparing = true;
+                                weldHolding = false;
+                                weldRecovering = false;
+                                finishWeldAfterControl = false;
+                                weldPrepareStartTime = simTime;
+                                weldPrepareReadySince = -1.0;
+                                weldRecoverTargetTcp_W = weldPreApproachTcp_W;
+                                weldRecoverTargetRot_W = weldStartSample.pose.quat.toRotationMatrix();
+                                weldCoMDes = (weldStanceAuto && weldReapplyOnCloseLoop) ? weldStanceCoM_W : RobotState.pCoM_W;
+                                weldHoldOptimizedStance = weldStanceAuto && weldReapplyOnCloseLoop;
+                                RobotState.motionState = DataBus::WeldPrepare;
+                                RobotState.weld_active = false;
+                                RobotState.weld_recover_phase = 0.0;
+                                jsInterp.setIniPos(RobotState.q(0), RobotState.q(1), RobotState.base_rpy(2));
+                                std::cout << "[WeldPrepare] started by G at t=" << simTime
+                                          << " s using " << weldTrajectory.path()
+                                          << ", straight_length=" << weldPrepareMotion.length
+                                          << " m, duration=" << weldPrepareMotion.duration
+                                          << " s, speed=" << weldPrepareMotion.speed << " m/s" << std::endl;
+                                std::cout << "[WeldPrepare] tcp start/end: "
+                                          << weldPrepareMotion.start.pos.transpose() << " / "
+                                          << weldPrepareMotion.end.pos.transpose() << std::endl;
+                                printRealPublishStateForWeld("WeldPrepare started");
+                            }
                         }
                     }
                     else
@@ -2803,21 +2934,21 @@ int main(int argc, char **argv)
                                                       RobotState.base_rot, weldWorkpiece);
             }
 
-            if (RobotState.motionState == DataBus::WeldPrepare && weldPreparing && weldTrajectoryReady)
+            if (RobotState.motionState == DataBus::WeldPrepare && weldPreparing &&
+                weldTrajectoryReady && weldPrepareMotion.valid)
             {
-                const auto weldSample = weldTrajectory.sample(0.0);
-                const double prepareAlpha = smoothStep01((simTime - weldPrepareStartTime) / weldPrepareMaxT);
+                auto prepareSample = sampleStraightTcpMotion(weldPrepareMotion, simTime - weldPrepareStartTime);
+                prepareSample.segmentIndex = -3;
                 RobotState.weld_active = false;
-                RobotState.weld_tcp_pos_des_W =
-                    (1.0 - prepareAlpha) * weldPrepareStartTcpPos_W + prepareAlpha * weldSample.pose.pos;
-                RobotState.weld_tcp_rot_des_W = weldSample.pose.quat.toRotationMatrix();
-                RobotState.weld_tcp_linear_vel_des_W.setZero();
+                RobotState.weld_tcp_pos_des_W = prepareSample.pose.pos;
+                RobotState.weld_tcp_rot_des_W = prepareSample.pose.quat.toRotationMatrix();
+                RobotState.weld_tcp_linear_vel_des_W = prepareSample.linearVel;
                 RobotState.weld_tcp_angular_vel_des_W.setZero();
-                RobotState.weld_tcp_linear_acc_des_W.setZero();
+                RobotState.weld_tcp_linear_acc_des_W = prepareSample.linearAcc;
                 RobotState.weld_tcp_angular_acc_des_W.setZero();
-                RobotState.weld_phase = prepareAlpha;
-                RobotState.weld_segment_index = static_cast<double>(weldSample.segmentIndex);
-                RobotState.weld_prepare_phase = prepareAlpha;
+                RobotState.weld_phase = prepareSample.phase;
+                RobotState.weld_segment_index = static_cast<double>(prepareSample.segmentIndex);
+                RobotState.weld_prepare_phase = prepareSample.phase;
                 RobotState.weld_recover_phase = 0.0;
                 WBC_solv.pCoMDes = weldCoMDes;
                 finishWeldAfterControl = false;
@@ -2864,25 +2995,36 @@ int main(int argc, char **argv)
                 WBC_solv.pCoMDes = weldCoMDes;
                 finishWeldAfterControl = false;
             }
-            else if (RobotState.motionState == DataBus::WeldRecover && weldRecovering && weldTrajectoryReady)
+            else if (RobotState.motionState == DataBus::WeldRecover && weldRecovering &&
+                     weldTrajectoryReady && weldRetractMotion.valid && weldRecoverMotion.valid)
             {
-                const double rawPhase = (simTime - weldRecoverStartTime) / weldRecoverDuration;
-                const double recoverAlpha = smoothStep01(rawPhase);
-                const double recoverAlphaDot = smoothStep01Dot(rawPhase) / weldRecoverDuration;
-                const double recoverAlphaDdot = smoothStep01Ddot(rawPhase) /
-                                                (weldRecoverDuration * weldRecoverDuration);
-                const Eigen::Vector3d recoverDelta = weldRecoverTargetTcp_W - weldRecoverStartTcpPos_W;
+                const double recoverElapsed = simTime - weldRecoverStartTime;
+                const double recoverTotalDuration = weldRetractMotion.duration + weldRecoverMotion.duration;
+                WeldTrajectory::Sample recoverSample;
+                if (recoverElapsed <= weldRetractMotion.duration)
+                {
+                    recoverSample = sampleStraightTcpMotion(weldRetractMotion, recoverElapsed);
+                    recoverSample.segmentIndex = -2;
+                }
+                else
+                {
+                    recoverSample = sampleStraightTcpMotion(weldRecoverMotion,
+                                                            recoverElapsed - weldRetractMotion.duration);
+                    recoverSample.segmentIndex = -4;
+                }
                 RobotState.weld_active = false;
-                RobotState.weld_tcp_pos_des_W = weldRecoverStartTcpPos_W + recoverAlpha * recoverDelta;
-                RobotState.weld_tcp_rot_des_W = weldRecoverTargetRot_W;
-                RobotState.weld_tcp_linear_vel_des_W = recoverAlphaDot * recoverDelta;
+                RobotState.weld_tcp_pos_des_W = recoverSample.pose.pos;
+                RobotState.weld_tcp_rot_des_W = recoverSample.pose.quat.toRotationMatrix();
+                RobotState.weld_tcp_linear_vel_des_W = recoverSample.linearVel;
                 RobotState.weld_tcp_angular_vel_des_W.setZero();
-                RobotState.weld_tcp_linear_acc_des_W = recoverAlphaDdot * recoverDelta;
+                RobotState.weld_tcp_linear_acc_des_W = recoverSample.linearAcc;
                 RobotState.weld_tcp_angular_acc_des_W.setZero();
                 RobotState.weld_phase = 1.0;
-                RobotState.weld_segment_index = -2.0;
+                RobotState.weld_segment_index = static_cast<double>(recoverSample.segmentIndex);
                 RobotState.weld_prepare_phase = 1.0;
-                RobotState.weld_recover_phase = recoverAlpha;
+                RobotState.weld_recover_phase = recoverTotalDuration > 1.0e-9
+                                                    ? std::clamp(recoverElapsed / recoverTotalDuration, 0.0, 1.0)
+                                                    : 1.0;
                 WBC_solv.pCoMDes = weldCoMDes;
                 finishWeldAfterControl = false;
             }
@@ -3021,9 +3163,12 @@ int main(int argc, char **argv)
             }
             else if (RobotState.motionState == DataBus::WeldPrepare && weldPreparing)
             {
-                const double startErr = (weldTrajectory.sample(0.0).pose.pos - RobotState.weld_tcp_pos_cur_W).norm();
+                const double prepareDuration = weldPrepareMotion.valid ? weldPrepareMotion.duration : 0.0;
+                const double startErr = (weldPrepareMotion.end.pos - RobotState.weld_tcp_pos_cur_W).norm();
                 const double prepareElapsed = simTime - weldPrepareStartTime;
-                const double preparePhase = smoothStep01(prepareElapsed / weldPrepareMaxT);
+                const double preparePhase = (prepareDuration > 1.0e-9)
+                                                ? quinticStep01(prepareElapsed / prepareDuration)
+                                                : 1.0;
                 if (preparePhase >= weldPrepareMinPhase && startErr < weldPrepareStartErr)
                 {
                     if (weldPrepareReadySince < 0.0)
@@ -3049,37 +3194,36 @@ int main(int argc, char **argv)
                 else
                 {
                     weldPrepareReadySince = -1.0;
-                    if (prepareElapsed >= weldPrepareMaxT)
+                    if (prepareElapsed >= prepareDuration && startErr < weldPrepareFallbackErr)
                     {
-                        if (startErr < weldPrepareFallbackErr)
-                        {
-                            weldPreparing = false;
-                            weldActive = true;
-                            weldHolding = false;
-                            weldRecovering = false;
-                            weldStartTime = simTime;
-                            RobotState.motionState = DataBus::Weld;
-                            RobotState.weld_active = true;
-                            RobotState.weld_prepare_phase = 1.0;
-                            resetWeldStabilityMetrics();
-                            std::cout << "[Weld] started with prepare fallback at t=" << simTime
-                                      << " s, start_err=" << startErr << " m" << std::endl;
-                            printRealPublishStateForWeld("Weld trajectory started");
-                        }
-                        else
-                        {
-                            weldPreparing = false;
-                            weldActive = false;
-                            weldHolding = false;
-                            weldRecovering = false;
-                            finishWeldAfterControl = false;
-                            RobotState.motionState = DataBus::Stand;
-                            RobotState.weld_active = false;
-                            RobotState.weld_recover_phase = 0.0;
-                            weldHoldOptimizedStance = weldStanceReady && weldStanceAuto && weldReapplyOnCloseLoop;
-                            std::cerr << "[WeldPrepare] aborted: start_err=" << startErr
-                                      << " m after " << prepareElapsed << " s" << std::endl;
-                        }
+                        weldPreparing = false;
+                        weldActive = true;
+                        weldHolding = false;
+                        weldRecovering = false;
+                        weldStartTime = simTime;
+                        RobotState.motionState = DataBus::Weld;
+                        RobotState.weld_active = true;
+                        RobotState.weld_prepare_phase = 1.0;
+                        resetWeldStabilityMetrics();
+                        std::cout << "[Weld] started with prepare fallback at t=" << simTime
+                                  << " s, start_err=" << startErr
+                                  << " m, prepare_duration=" << prepareDuration << " s" << std::endl;
+                        printRealPublishStateForWeld("Weld trajectory started");
+                    }
+                    else if (prepareElapsed >= prepareDuration + weldFinishTimeout)
+                    {
+                        weldPreparing = false;
+                        weldActive = false;
+                        weldHolding = false;
+                        weldRecovering = false;
+                        finishWeldAfterControl = false;
+                        RobotState.motionState = DataBus::Stand;
+                        RobotState.weld_active = false;
+                        RobotState.weld_recover_phase = 0.0;
+                        weldHoldOptimizedStance = weldStanceReady && weldStanceAuto && weldReapplyOnCloseLoop;
+                        std::cerr << "[WeldPrepare] aborted: start_err=" << startErr
+                                  << " m after " << prepareElapsed
+                                  << " s, prepare_duration=" << prepareDuration << " s" << std::endl;
                     }
                 }
             }
@@ -3090,24 +3234,75 @@ int main(int argc, char **argv)
                     weldHolding = false;
                     weldRecovering = true;
                     weldRecoverStartTime = simTime;
-                    weldRecoverStartTcpPos_W = weldFinalTcpPos_W;
                     weldRecoverTargetTcp_W = weldPreApproachTcp_W;
                     weldRecoverTargetRot_W = weldTrajectoryReady
                                                   ? weldTrajectory.sample(0.0).pose.quat.toRotationMatrix()
                                                   : weldFinalTcpRot_W;
-                    RobotState.motionState = DataBus::WeldRecover;
-                    RobotState.weld_recover_phase = 0.0;
-                    WBC_solv.setQini(qIniDes, RobotState.q);
-                    std::cout << "[WeldRecover] started at t=" << simTime
-                              << " s, target_tcp=" << weldRecoverTargetTcp_W.transpose() << std::endl;
+                    const Eigen::Vector3d recoverAwayDir_W =
+                        normalizedOr(weldWorkpiece.approachDir_W, Eigen::Vector3d(-1.0, 0.0, 0.0));
+                    WeldTrajectory::Pose recoverStartPose;
+                    recoverStartPose.pos = weldFinalTcpPos_W;
+                    recoverStartPose.quat = Eigen::Quaterniond(weldFinalTcpRot_W);
+                    recoverStartPose.quat.normalize();
+                    WeldTrajectory::Pose retractEndPose = recoverStartPose;
+                    retractEndPose.pos = weldFinalTcpPos_W + recoverAwayDir_W * weldPreApproachDist;
+                    WeldTrajectory::Pose recoverEndPose;
+                    recoverEndPose.pos = weldRecoverTargetTcp_W;
+                    recoverEndPose.quat = Eigen::Quaterniond(weldRecoverTargetRot_W);
+                    recoverEndPose.quat.normalize();
+                    weldRetractMotion = makeStraightTcpMotion(recoverStartPose,
+                                                              retractEndPose,
+                                                              controllerConfig.weldTrajectorySpeed);
+                    weldRecoverMotion = makeStraightTcpMotion(retractEndPose,
+                                                              recoverEndPose,
+                                                              controllerConfig.weldTrajectorySpeed);
+                    if (!weldRetractMotion.valid || !weldRecoverMotion.valid)
+                    {
+                        weldActive = false;
+                        weldPreparing = false;
+                        weldHolding = false;
+                        weldRecovering = false;
+                        finishWeldAfterControl = false;
+                        RobotState.motionState = DataBus::Stand;
+                        RobotState.weld_active = false;
+                        RobotState.weld_recover_phase = 0.0;
+                        weldHoldOptimizedStance = weldStanceReady && weldStanceAuto && weldReapplyOnCloseLoop;
+                        std::cerr << "[WeldRecover] aborted: invalid straight TCP motion." << std::endl;
+                    }
+                    else
+                    {
+                        const double recoverTotalDuration = weldRetractMotion.duration + weldRecoverMotion.duration;
+                        RobotState.motionState = DataBus::WeldRecover;
+                        RobotState.weld_recover_phase = 0.0;
+                        WBC_solv.setQini(qIniDes, RobotState.q);
+                        std::cout << "[WeldRecover] started at t=" << simTime
+                                  << " s, retract_length=" << weldRetractMotion.length
+                                  << " m, retract_duration=" << weldRetractMotion.duration
+                                  << " s, return_length=" << weldRecoverMotion.length
+                                  << " m, return_duration=" << weldRecoverMotion.duration
+                                  << " s, total_duration=" << recoverTotalDuration
+                                  << " s, speed=" << weldRecoverMotion.speed
+                                  << " m/s, away_dir=" << recoverAwayDir_W.transpose()
+                                  << ", target_tcp=" << weldRecoverTargetTcp_W.transpose() << std::endl;
+                        std::cout << "[WeldRecover] retract tcp start/end: "
+                                  << weldRetractMotion.start.pos.transpose() << " / "
+                                  << weldRetractMotion.end.pos.transpose() << std::endl;
+                        std::cout << "[WeldRecover] return tcp start/end: "
+                                  << weldRecoverMotion.start.pos.transpose() << " / "
+                                  << weldRecoverMotion.end.pos.transpose() << std::endl;
+                    }
                 }
             }
             else if (RobotState.motionState == DataBus::WeldRecover && weldRecovering)
             {
                 const double recoverElapsed = simTime - weldRecoverStartTime;
                 const double recoverErr = (weldRecoverTargetTcp_W - RobotState.weld_tcp_pos_cur_W).norm();
-                if (recoverElapsed >= weldRecoverDuration &&
-                    (recoverErr < 0.015 || recoverElapsed >= weldRecoverDuration + 0.8))
+                const double recoverDuration =
+                    (weldRetractMotion.valid && weldRecoverMotion.valid)
+                        ? (weldRetractMotion.duration + weldRecoverMotion.duration)
+                        : 0.0;
+                if (recoverElapsed >= recoverDuration &&
+                    (recoverErr < 0.015 || recoverElapsed >= recoverDuration + 0.8))
                 {
                     if (recoverErr >= 0.015)
                     {
@@ -3194,6 +3389,36 @@ int main(int argc, char **argv)
             if (logCtrlCount >= logDecimation)
             {
                 logCtrlCount = 0;
+                std::vector<double> realRightArmFbPos(kRightArmJointCount, 0.0);
+                std::vector<double> realRightArmTrackErr(kRightArmJointCount, 0.0);
+                double realRightArmTrackMaxAbs = 0.0;
+                double realRightArmTrackRms = 0.0;
+                double realRightArmTrackValid = 0.0;
+                double realRightArmFeedbackAge = 0.0;
+                if (simRealOpenloopEnabled && simRealCommandPublishEnabled && realRightArmCommandPublished)
+                {
+                    std::vector<double> commandPos23;
+                    std::string feedbackErr;
+                    if (simRealCommandPub.getLatestCommandJointPositions(commandPos23,
+                                                                         controllerConfig.rosDataTimeoutSec,
+                                                                         &feedbackErr,
+                                                                         &realRightArmFeedbackAge) &&
+                        commandPos23.size() >= kCommandRightArmStart + kRightArmJointCount)
+                    {
+                        double sumSq = 0.0;
+                        for (size_t i = 0; i < kRightArmJointCount; i++)
+                        {
+                            realRightArmFbPos[i] = commandPos23[kCommandRightArmStart + i];
+                            realRightArmTrackErr[i] = realRightArmCmdPos[i] - realRightArmFbPos[i];
+                            realRightArmTrackMaxAbs =
+                                std::max(realRightArmTrackMaxAbs, std::fabs(realRightArmTrackErr[i]));
+                            sumSq += realRightArmTrackErr[i] * realRightArmTrackErr[i];
+                        }
+                        realRightArmTrackRms =
+                            std::sqrt(sumSq / static_cast<double>(kRightArmJointCount));
+                        realRightArmTrackValid = 1.0;
+                    }
+                }
                 logger.startNewLine();
                 logger.recItermData("dyn_time", simTime);
             logger.recItermData("motors_pos_cur", RobotState.motors_pos_cur);
@@ -3263,8 +3488,15 @@ int main(int argc, char **argv)
             logger.recItermData("weld_base_rpy_delta", RobotState.weld_base_rpy_delta);
             logger.recItermData("weld_cop_margin", RobotState.weld_cop_margin);
             logger.recItermData("weld_tau_margin", RobotState.weld_tau_margin);
-                logger.recItermData("weld_clearance_margin", RobotState.weld_clearance_margin);
-                logger.finishLine();
+            logger.recItermData("weld_clearance_margin", RobotState.weld_clearance_margin);
+            logger.recItermData("real_right_arm_cmd_pos", realRightArmCmdPos);
+            logger.recItermData("real_right_arm_fb_pos", realRightArmFbPos);
+            logger.recItermData("real_right_arm_track_err", realRightArmTrackErr);
+            logger.recItermData("real_right_arm_track_err_max_abs", realRightArmTrackMaxAbs);
+            logger.recItermData("real_right_arm_track_err_rms", realRightArmTrackRms);
+            logger.recItermData("real_right_arm_track_valid", realRightArmTrackValid);
+            logger.recItermData("real_right_arm_feedback_age", realRightArmFeedbackAge);
+            logger.finishLine();
             }
 
             if (finishWeldAfterControl && RobotState.motionState == DataBus::Weld)

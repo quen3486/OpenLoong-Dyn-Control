@@ -232,7 +232,8 @@ void ROS2_Interface_V4_Leg::spinSome()
 
 bool ROS2_Interface_V4_Leg::getLatestCommandJointPositions(std::vector<double> &positions,
                                                            double maxAgeSec,
-                                                           std::string *errMsg) const
+                                                           std::string *errMsg,
+                                                           double *ageSec) const
 {
 #if OPENLOONG_HAS_ROS2
     const double timeoutSafe = std::max(0.001, maxAgeSec);
@@ -260,6 +261,10 @@ bool ROS2_Interface_V4_Leg::getLatestCommandJointPositions(std::vector<double> &
     }
 
     const double age = std::chrono::duration<double>(now - lastCommandJointPositionsTime_).count();
+    if (ageSec != nullptr)
+    {
+        *ageSec = age;
+    }
     if (age > timeoutSafe)
     {
         if (errMsg != nullptr)
@@ -279,6 +284,7 @@ bool ROS2_Interface_V4_Leg::getLatestCommandJointPositions(std::vector<double> &
 #else
     (void)positions;
     (void)maxAgeSec;
+    (void)ageSec;
     if (errMsg != nullptr)
     {
         *errMsg = "ROS2 support is disabled at build time.";
