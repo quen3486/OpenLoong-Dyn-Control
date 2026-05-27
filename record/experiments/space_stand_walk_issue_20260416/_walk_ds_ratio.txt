@@ -1,5 +1,0 @@
-inplace_ds_off walk_ds_ratio=0.00%
-walk_ds_off walk_ds_ratio=0.00%
-inplace_ds_on walk_ds_ratio=12.85%
-walk_ds_on walk_ds_ratio=12.85%
-inplace_ds_on_short walk_ds_ratio=6.42%

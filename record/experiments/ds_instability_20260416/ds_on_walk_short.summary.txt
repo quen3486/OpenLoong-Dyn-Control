@@ -1,3 +1,0 @@
-walk=4496 qp_bad=0(0.00%) zmin=0.9883 first95=None vx_mae=0.0160
-ratio L=46.95% R=44.71% DS=8.34% longest_state=0 dur=0.330
-fail_prints=0 wsr_errors=0

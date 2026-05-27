@@ -1,1 +1,0 @@
-case=walk_ds_on_short qp_bad=0(0.00%) zmin=0.9761 zmean=1.0008 first95=None first80=None roll=0.0348 pitch=0.0174 vx_mae=0.0387 ds_ratio_walk=0.00%

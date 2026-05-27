@@ -1,1 +1,0 @@
-case=t080_lowspd_ds_strict qp_bad=5(0.12%) first95=5.235 first80=5.295 zmin=-0.6416 zmean=0.4439 vx_mae=0.2970

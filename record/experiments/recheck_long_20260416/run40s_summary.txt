@@ -1,1 +1,0 @@
-40s rows=20001 walk_rows=18496 walk_start=3.011 qp_bad=0(0.00%) first95=20.211 first80=20.483 zmin=-0.8951 zmean=0.4076 roll=0.9826 pitch=0.5985 vx_mae=0.5440

@@ -1,1 +1,0 @@
-case=D_phi_low_inplace walk_samples=3502 qp_bad=0(0.00%) zmin=-0.7834 first95=3.459 first80=4.709 vx_mae=0.4615 roll_rms=0.9682 pitch_rms=0.4998 ds_ratio=12.85%

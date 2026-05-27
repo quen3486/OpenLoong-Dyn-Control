@@ -1,1 +1,0 @@
-case=t080_combo_A mainDt=[0.0020,0.0020] mpcDt=[0.0100,0.0100] qp_bad=0(0.00%) first95=8.001 first80=None zmin=0.8352 zmean=0.9967 vx_mae=0.2004

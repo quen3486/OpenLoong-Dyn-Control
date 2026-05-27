@@ -1,1 +1,0 @@
-FINAL_INPLACE qp_bad=0(0.00%) zmin=0.9823 first95=None first80=None roll=0.0434 pitch=0.0177 vx_mae=0.0700 ds_ratio_walk=6.42%

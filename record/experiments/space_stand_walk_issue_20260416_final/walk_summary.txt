@@ -1,1 +1,0 @@
-FINAL_WALK qp_bad=0(0.00%) zmin=-0.5747 first95=8.303 first80=8.607 roll=0.4275 pitch=0.3823 vx_mae=0.1864 ds_ratio_walk=7.28%

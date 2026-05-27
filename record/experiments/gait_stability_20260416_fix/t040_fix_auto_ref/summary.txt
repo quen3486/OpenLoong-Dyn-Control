@@ -1,1 +1,0 @@
-case=t040_fix_auto_ref qp_bad=0(0.00%) ds_ratio=8.74% phiSwitch=[0.600,0.600] first95=None first80=None zmin=0.9928 zmean=1.0056 roll=0.0263 pitch=0.0170 vx_mae=0.0529

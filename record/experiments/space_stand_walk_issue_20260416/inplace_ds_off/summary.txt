@@ -1,1 +1,0 @@
-case=inplace_ds_off qp_bad=0(0.00%) zmin=-0.9972 zmean=0.8758 first95=9.307 first80=9.411 roll=0.5693 pitch=0.2704 vx_mae=0.2139 ds_ratio=30.06% walk_ratio=69.94% phiRuntime=[0.350,0.600]
