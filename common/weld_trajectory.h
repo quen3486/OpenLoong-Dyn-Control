@@ -27,8 +27,16 @@ public:
     };
 
     bool loadCsv(const std::string &path, std::string *errMsg = nullptr);
+    bool setPolyline(const std::vector<Pose> &points,
+                     double speed,
+                     std::string *errMsg = nullptr);
+    bool setSingleSegment(const Pose &start,
+                          const Pose &end,
+                          double speed,
+                          std::string *errMsg = nullptr);
     bool scalePathLength(double targetLength, std::string *errMsg = nullptr);
     bool setSpeed(double speed, std::string *errMsg = nullptr);
+    bool setFixedOrientation(const Eigen::Quaterniond &quat, std::string *errMsg = nullptr);
     void applyTranslation(const Eigen::Vector3d &offset);
     Sample sample(double elapsedSec) const;
 

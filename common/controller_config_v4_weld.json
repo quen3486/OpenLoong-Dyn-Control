@@ -65,12 +65,15 @@
   "contact_miu": 0.7,            // 地面摩擦系数（统一用于MPC与WBC摩擦锥）
 
   // ===== 焊接任务 =====
-  "weld_seam_length": 0.35,       // 工件焊缝长度(m)，启动时按该长度缩放直线焊缝
-  "weld_trajectory_speed": 0.03, // 焊接进入/焊缝/退出统一TCP速度(m/s)
+  "weld_seam_length": 0.28,       // 工件焊缝长度(m)，先缩短做可达性测试
+  "weld_trajectory_speed": 0.01, // 焊接进入/焊缝/退出统一TCP速度(m/s)
   "weld_workpiece_random_enabled": false, // 是否在第一次按G准备焊接时随机生成工件位置
+  "weld_right_arm_start_q": [0.20283,-1.6297,-0.0028,1.3002,-1.0869,0], // 右臂起点关节角(6)
+  "weld_right_arm_end_q": [0.034687394,-1.613055402,-0.05878628,1.439065457,-1.087157004,0],   // 右臂终点关节角(6)
+  "weld_right_arm_speed": 0.01, // 右臂TCP直线插补速度(m/s)
 
   // ===== MPC机型参数与接触约束 =====
-  "mpc_mass": 59.12,               // speedbot_v4总质量(kg)，来自模型惯量质量和约59.115
+  "mpc_mass": 59.62,               // speedbot_v4_weld总质量(kg)，含0.5kg焊枪
   "mpc_use_databus_inertia": true, // 惯量来源：true=每周期使用Pinocchio写入DataBus.inertia；false=使用下方固定矩阵
   "mpc_inertia_xx": 12.05,       // 固定惯量回退值 Ixx(kg·m^2)
   "mpc_inertia_xy": 0.0,         // 固定惯量回退值 Ixy(kg·m^2)

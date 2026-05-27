@@ -163,6 +163,74 @@ bool mapCommandJointPositionsToV4Source(const std::vector<double> &commandPos23,
     return true;
 }
 
+bool copyFiniteV4SourceTarget(const DataBus &robotState,
+                              std::vector<double> &sourcePos22,
+                              std::string *errMsg)
+{
+    if (robotState.motors_pos_des.size() < kV4CommandSourceJointNames.size())
+    {
+        if (errMsg != nullptr)
+        {
+            *errMsg = "motors_pos_des has fewer than 22 values";
+        }
+        return false;
+    }
+    sourcePos22.assign(robotState.motors_pos_des.begin(),
+                       robotState.motors_pos_des.begin() + kV4CommandSourceJointNames.size());
+    for (size_t i = 0; i < sourcePos22.size(); i++)
+    {
+        if (!std::isfinite(sourcePos22[i]))
+        {
+            if (errMsg != nullptr)
+            {
+                *errMsg = "motors_pos_des[" + std::to_string(i) + "] is NaN/Inf";
+            }
+            return false;
+        }
+    }
+    if (errMsg != nullptr)
+    {
+        errMsg->clear();
+    }
+    return true;
+}
+
+bool mapRightArmJointPositionsToV4Source(const std::vector<double> &rightArmPos5,
+                                         const DataBus &robotState,
+                                         std::vector<double> &sourcePos22,
+                                         std::string *errMsg)
+{
+    if (rightArmPos5.size() < kRightArmJointCount)
+    {
+        if (errMsg != nullptr)
+        {
+            *errMsg = "expected 5 right arm joint positions, got " + std::to_string(rightArmPos5.size());
+        }
+        return false;
+    }
+    if (!copyFiniteV4SourceTarget(robotState, sourcePos22, errMsg))
+    {
+        return false;
+    }
+    for (size_t i = 0; i < kRightArmJointCount; i++)
+    {
+        if (!std::isfinite(rightArmPos5[i]))
+        {
+            if (errMsg != nullptr)
+            {
+                *errMsg = "right arm joint position[" + std::to_string(i) + "] is NaN/Inf";
+            }
+            return false;
+        }
+        sourcePos22[kV4RightArmSourceStart + i] = rightArmPos5[i];
+    }
+    if (errMsg != nullptr)
+    {
+        errMsg->clear();
+    }
+    return true;
+}
+
 struct V4OpenloopJointLimit
 {
     std::string name;
@@ -2169,6 +2237,14 @@ int main(int argc, char **argv)
     logger.addIterm("real_right_arm_track_err_rms", 1);
     logger.addIterm("real_right_arm_track_valid", 1);
     logger.addIterm("real_right_arm_feedback_age", 1);
+    logger.addIterm("real_command_publish_active", 1);
+    logger.addIterm("real_command_publish_period", 1);
+    logger.addIterm("real_command_publish_countdown", 1);
+    logger.addIterm("real_command_published_this_cycle", 1);
+    logger.addIterm("real_command_total_published", 1);
+    logger.addIterm("real_command_subscription_count", 1);
+    logger.addIterm("real_main_loop_wall_dt", 1);
+    logger.addIterm("real_command_publish_wall_dt", 1);
 
     logger.finishItermAdding();
 
@@ -2176,7 +2252,7 @@ int main(int argc, char **argv)
     int mainCtrlCount = mainCtrlDecimation - 1;
     int mpcCtrlCount = mpcCtrlDecimation - 1;
     int logCtrlCount = 0;
-    constexpr int logDecimation = 5;
+    constexpr int logDecimation = 1;
 
     bool openLoopPhaseActive = true;
     bool weldTaskRequested = false;
@@ -2350,8 +2426,18 @@ int main(int argc, char **argv)
                   << " s period, subscription_count=" << subCount << "." << std::endl;
     };
 
+    int realCommandTotalPublished = 0;
+    double realCommandPublishedThisCycle = 0.0;
+    double realCommandPublishWallDt = 0.0;
+    auto lastRealCommandPublishWallTime = std::chrono::steady_clock::now();
+    bool haveLastRealCommandPublishWallTime = false;
+    double mainLoopWallDt = 0.0;
+    auto lastMainLoopWallTime = std::chrono::steady_clock::now();
+    bool haveLastMainLoopWallTime = false;
+
     auto publishV4SimRealCommand = [&](double now)
     {
+        realCommandPublishedThisCycle = 0.0;
         if (!simRealOpenloopEnabled || !simRealCommandPublishEnabled)
         {
             return;
@@ -2429,6 +2515,14 @@ int main(int argc, char **argv)
 
         simRealCommandPub.setMotorsCommand(publishPos, simRealZeroVel, simRealZeroTau);
         simRealCommandPub.spinSome();
+        const auto publishWallNow = std::chrono::steady_clock::now();
+        realCommandPublishWallDt = haveLastRealCommandPublishWallTime
+                                       ? std::chrono::duration<double>(publishWallNow - lastRealCommandPublishWallTime).count()
+                                       : 0.0;
+        lastRealCommandPublishWallTime = publishWallNow;
+        haveLastRealCommandPublishWallTime = true;
+        realCommandPublishedThisCycle = 1.0;
+        realCommandTotalPublished++;
         simRealLastPublishedPos = publishPos;
         for (size_t i = 0; i < kRightArmJointCount; i++)
         {
@@ -2493,6 +2587,12 @@ int main(int argc, char **argv)
                 continue;
             }
             mainCtrlCount = 0;
+            const auto mainLoopWallNow = std::chrono::steady_clock::now();
+            mainLoopWallDt = haveLastMainLoopWallTime
+                                 ? std::chrono::duration<double>(mainLoopWallNow - lastMainLoopWallTime).count()
+                                 : 0.0;
+            lastMainLoopWallTime = mainLoopWallNow;
+            haveLastMainLoopWallTime = true;
             finishWeldAfterControl = false;
 
             if (simTime > 1 && StateModule.flag_init)
@@ -2555,11 +2655,36 @@ int main(int argc, char **argv)
                     realWeldStanceRampActive = false;
                     simRealCommandPub.spinSome();
                     std::vector<double> liveCommandPos23;
+                    std::vector<double> liveRightArmPos5;
                     std::vector<double> liveSourcePos22;
                     std::string liveStartErr;
-                    if (!simRealCommandPub.getLatestCommandJointPositions(
-                            liveCommandPos23, controllerConfig.rosDataTimeoutSec, &liveStartErr) ||
-                        !mapCommandJointPositionsToV4Source(liveCommandPos23, liveSourcePos22, &liveStartErr))
+                    std::string fullStartErr;
+                    std::string rightArmStartErr;
+                    std::string rampStartSource;
+                    bool haveLiveStart = false;
+                    if (simRealCommandPub.getLatestCommandJointPositions(
+                            liveCommandPos23, controllerConfig.rosDataTimeoutSec, &fullStartErr) &&
+                        mapCommandJointPositionsToV4Source(liveCommandPos23, liveSourcePos22, &fullStartErr))
+                    {
+                        haveLiveStart = true;
+                        rampStartSource = "live 23-joint " + controllerConfig.rosTopicJointStates;
+                    }
+                    else if (simRealCommandPub.getLatestRightArmJointPositions(
+                                 liveRightArmPos5, controllerConfig.rosDataTimeoutSec, &rightArmStartErr) &&
+                             mapRightArmJointPositionsToV4Source(liveRightArmPos5,
+                                                                 RobotState,
+                                                                 liveSourcePos22,
+                                                                 &rightArmStartErr))
+                    {
+                        haveLiveStart = true;
+                        rampStartSource = "live right_arm5 " + controllerConfig.rosTopicJointStates;
+                    }
+                    else
+                    {
+                        liveStartErr = "full23: " + fullStartErr + "; right_arm5: " + rightArmStartErr;
+                    }
+
+                    if (!haveLiveStart)
                     {
                         simRealCommandPublishEnabled = false;
                         realWeldStanceRampActive = false;
@@ -2571,6 +2696,7 @@ int main(int argc, char **argv)
                     {
                         simRealRampStartPos = liveSourcePos22;
                         double maxStartDelta = 0.0;
+                        double maxRightArmStartDelta = 0.0;
                         if (RobotState.motors_pos_des.size() >= kV4CommandSourceJointNames.size())
                         {
                             for (size_t i = 0; i < kV4CommandSourceJointNames.size(); i++)
@@ -2582,6 +2708,17 @@ int main(int argc, char **argv)
                                                                        simRealRampStartPos[i]));
                                 }
                             }
+                            for (size_t i = 0; i < kRightArmJointCount; i++)
+                            {
+                                const size_t sourceIndex = kV4RightArmSourceStart + i;
+                                if (std::isfinite(RobotState.motors_pos_des[sourceIndex]))
+                                {
+                                    maxRightArmStartDelta =
+                                        std::max(maxRightArmStartDelta,
+                                                 std::fabs(RobotState.motors_pos_des[sourceIndex] -
+                                                           simRealRampStartPos[sourceIndex]));
+                                }
+                            }
                         }
                         simRealRampElapsed = 0.0;
                         simRealCommandPubCount = simRealCommandPubDecimation - 1;
@@ -2589,8 +2726,9 @@ int main(int argc, char **argv)
                         std::cout << "[PublishGate-V4SimOpenLoop] real command publishing enabled by P, topic="
                                   << controllerConfig.rosTopicActionCmd
                                   << ", motionState=" << motionStateName(RobotState.motionState)
-                                  << ", ramp_start=live " << controllerConfig.rosTopicJointStates
+                                  << ", ramp_start=" << rampStartSource
                                   << ", max_start_delta=" << maxStartDelta
+                                  << " rad, max_right_arm_start_delta=" << maxRightArmStartDelta
                                   << " rad, real command initial ramp_time=" << realCommandInitialRampTimeSec
                                   << " s" << std::endl;
                     }
@@ -3398,17 +3536,38 @@ int main(int argc, char **argv)
                 if (simRealOpenloopEnabled && simRealCommandPublishEnabled && realRightArmCommandPublished)
                 {
                     std::vector<double> commandPos23;
+                    std::vector<double> rightArmPos5;
                     std::string feedbackErr;
+                    bool haveRightArmFeedback = false;
                     if (simRealCommandPub.getLatestCommandJointPositions(commandPos23,
                                                                          controllerConfig.rosDataTimeoutSec,
                                                                          &feedbackErr,
                                                                          &realRightArmFeedbackAge) &&
                         commandPos23.size() >= kCommandRightArmStart + kRightArmJointCount)
                     {
-                        double sumSq = 0.0;
                         for (size_t i = 0; i < kRightArmJointCount; i++)
                         {
                             realRightArmFbPos[i] = commandPos23[kCommandRightArmStart + i];
+                        }
+                        haveRightArmFeedback = true;
+                    }
+                    else if (simRealCommandPub.getLatestRightArmJointPositions(rightArmPos5,
+                                                                               controllerConfig.rosDataTimeoutSec,
+                                                                               &feedbackErr,
+                                                                               &realRightArmFeedbackAge) &&
+                             rightArmPos5.size() >= kRightArmJointCount)
+                    {
+                        for (size_t i = 0; i < kRightArmJointCount; i++)
+                        {
+                            realRightArmFbPos[i] = rightArmPos5[i];
+                        }
+                        haveRightArmFeedback = true;
+                    }
+                    if (haveRightArmFeedback)
+                    {
+                        double sumSq = 0.0;
+                        for (size_t i = 0; i < kRightArmJointCount; i++)
+                        {
                             realRightArmTrackErr[i] = realRightArmCmdPos[i] - realRightArmFbPos[i];
                             realRightArmTrackMaxAbs =
                                 std::max(realRightArmTrackMaxAbs, std::fabs(realRightArmTrackErr[i]));
@@ -3496,6 +3655,19 @@ int main(int argc, char **argv)
             logger.recItermData("real_right_arm_track_err_rms", realRightArmTrackRms);
             logger.recItermData("real_right_arm_track_valid", realRightArmTrackValid);
             logger.recItermData("real_right_arm_feedback_age", realRightArmFeedbackAge);
+            logger.recItermData("real_command_publish_active",
+                                 simRealOpenloopEnabled && simRealCommandPublishEnabled ? 1.0 : 0.0);
+            logger.recItermData("real_command_publish_period",
+                                 simRealCommandPubDecimation * mainCtrlDt);
+            logger.recItermData("real_command_publish_countdown",
+                                 static_cast<double>(simRealCommandPubCount));
+            logger.recItermData("real_command_published_this_cycle", realCommandPublishedThisCycle);
+            logger.recItermData("real_command_total_published",
+                                 static_cast<double>(realCommandTotalPublished));
+            logger.recItermData("real_command_subscription_count",
+                                 static_cast<double>(simRealCommandPub.getActionSubscriptionCount()));
+            logger.recItermData("real_main_loop_wall_dt", mainLoopWallDt);
+            logger.recItermData("real_command_publish_wall_dt", realCommandPublishWallDt);
             logger.finishLine();
             }
 

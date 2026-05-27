@@ -341,4 +341,4 @@ t≈1ms  mit_controller 回调触发（异步）
 
 *文档基于源码分析生成，如代码更新请同步修订。*
 
-#--sim-real-openloop 和 --ros2-real 
+#--sim-real- 和 --ros2-real 

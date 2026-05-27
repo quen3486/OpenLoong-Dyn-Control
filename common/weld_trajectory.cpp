@@ -139,6 +139,119 @@ bool WeldTrajectory::loadCsv(const std::string &path, std::string *errMsg)
     return true;
 }
 
+bool WeldTrajectory::setSingleSegment(const Pose &start,
+                                      const Pose &end,
+                                      double speed,
+                                      std::string *errMsg)
+{
+    if (speed <= 1.0e-8 || !std::isfinite(speed))
+    {
+        if (errMsg != nullptr)
+        {
+            *errMsg = "weld trajectory speed must be positive";
+        }
+        return false;
+    }
+    const double length = (end.pos - start.pos).norm();
+    if (length <= 1.0e-8 || !std::isfinite(length))
+    {
+        if (errMsg != nullptr)
+        {
+            *errMsg = "weld trajectory segment length must be positive";
+        }
+        return false;
+    }
+    if (start.quat.norm() <= 1.0e-8 || end.quat.norm() <= 1.0e-8 ||
+        !std::isfinite(start.quat.norm()) || !std::isfinite(end.quat.norm()))
+    {
+        if (errMsg != nullptr)
+        {
+            *errMsg = "weld trajectory orientation must be a valid quaternion";
+        }
+        return false;
+    }
+
+    Segment seg;
+    seg.start = start;
+    seg.start.quat.normalize();
+    seg.end = end;
+    seg.end.quat.normalize();
+    seg.speed = speed;
+    segments_.assign(1, seg);
+    path_ = "generated_right_arm_tcp_line";
+    recomputeTiming();
+
+    if (errMsg != nullptr)
+    {
+        errMsg->clear();
+    }
+    return true;
+}
+
+bool WeldTrajectory::setPolyline(const std::vector<Pose> &points,
+                                 double speed,
+                                 std::string *errMsg)
+{
+    if (points.size() < 2)
+    {
+        if (errMsg != nullptr)
+        {
+            *errMsg = "weld trajectory polyline needs at least 2 points";
+        }
+        return false;
+    }
+    if (speed <= 1.0e-8 || !std::isfinite(speed))
+    {
+        if (errMsg != nullptr)
+        {
+            *errMsg = "weld trajectory speed must be positive";
+        }
+        return false;
+    }
+
+    std::vector<Segment> loaded;
+    loaded.reserve(points.size() - 1);
+    for (size_t i = 0; i + 1 < points.size(); ++i)
+    {
+        if (points[i].quat.norm() <= 1.0e-8 || points[i + 1].quat.norm() <= 1.0e-8 ||
+            !std::isfinite(points[i].quat.norm()) || !std::isfinite(points[i + 1].quat.norm()))
+        {
+            if (errMsg != nullptr)
+            {
+                *errMsg = "weld trajectory polyline has invalid orientation";
+            }
+            return false;
+        }
+
+        Segment seg;
+        seg.start = points[i];
+        seg.end = points[i + 1];
+        seg.start.quat.normalize();
+        seg.end.quat.normalize();
+        seg.speed = speed;
+        seg.length = (seg.end.pos - seg.start.pos).norm();
+        if (seg.length <= 1.0e-8 || !std::isfinite(seg.length))
+        {
+            if (errMsg != nullptr)
+            {
+                *errMsg = "weld trajectory polyline has zero-length segment";
+            }
+            return false;
+        }
+        loaded.push_back(seg);
+    }
+
+    segments_ = std::move(loaded);
+    path_ = "generated_right_arm_tcp_polyline";
+    recomputeTiming();
+
+    if (errMsg != nullptr)
+    {
+        errMsg->clear();
+    }
+    return true;
+}
+
 bool WeldTrajectory::scalePathLength(double targetLength, std::string *errMsg)
 {
     if (segments_.empty())
@@ -205,6 +318,41 @@ bool WeldTrajectory::setSpeed(double speed, std::string *errMsg)
         seg.speed = speed;
     }
     recomputeTiming();
+
+    if (errMsg != nullptr)
+    {
+        errMsg->clear();
+    }
+    return true;
+}
+
+bool WeldTrajectory::setFixedOrientation(const Eigen::Quaterniond &quat, std::string *errMsg)
+{
+    if (segments_.empty())
+    {
+        if (errMsg != nullptr)
+        {
+            *errMsg = "cannot set orientation on empty weld trajectory";
+        }
+        return false;
+    }
+
+    const double norm = quat.norm();
+    if (norm <= 1.0e-8 || !std::isfinite(norm))
+    {
+        if (errMsg != nullptr)
+        {
+            *errMsg = "weld trajectory orientation must be a valid quaternion";
+        }
+        return false;
+    }
+
+    const Eigen::Quaterniond fixedQuat = quat.normalized();
+    for (auto &seg : segments_)
+    {
+        seg.start.quat = fixedQuat;
+        seg.end.quat = fixedQuat;
+    }
 
     if (errMsg != nullptr)
     {

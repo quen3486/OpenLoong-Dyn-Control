@@ -1,0 +1,62 @@
+{
+  "right_shoulder_pitch_joint": {
+    "PVT_LPF_Fc": 20,
+    "kd": 40.0,
+    "kp": 800.0,
+    "maxPos": 2.67,
+    "maxSpeed": 4.0,
+    "maxTorque": 60.0,
+    "minPos": -3.09,
+    "gear": 1
+  },
+  "right_shoulder_roll_joint": {
+    "PVT_LPF_Fc": 20,
+    "kd": 40.0,
+    "kp": 800.0,
+    "maxPos": 1.59,
+    "maxSpeed": 4.0,
+    "maxTorque": 60.0,
+    "minPos": -2.25,
+    "gear": 1
+  },
+  "right_shoulder_yaw_joint": {
+    "PVT_LPF_Fc": 20,
+    "kd": 40.0,
+    "kp": 800.0,
+    "maxPos": 2.62,
+    "maxSpeed": 4.0,
+    "maxTorque": 60.0,
+    "minPos": -2.62,
+    "gear": 1
+  },
+  "right_elbow_joint": {
+    "PVT_LPF_Fc": 20,
+    "kd": 20.0,
+    "kp": 400.0,
+    "maxPos": 2.09,
+    "maxSpeed": 4.0,
+    "maxTorque": 40.0,
+    "minPos": -1.05,
+    "gear": 1
+  },
+  "right_wrist_roll_joint": {
+    "PVT_LPF_Fc": 20,
+    "kd": 10.0,
+    "kp": 200.0,
+    "maxPos": 1.97,
+    "maxSpeed": 4.0,
+    "maxTorque": 20.0,
+    "minPos": -1.97,
+    "gear": 1
+  },
+  "welding_gun_joint": {
+    "PVT_LPF_Fc": 20,
+    "kd": 10.0,
+    "kp": 200.0,
+    "maxPos": 3.14159,
+    "maxSpeed": 4.0,
+    "maxTorque": 20.0,
+    "minPos": -3.14159,
+    "gear": 1
+  }
+}

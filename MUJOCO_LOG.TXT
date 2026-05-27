@@ -13,3 +13,21 @@ WARNING: mju_openResource: unknown file '../models/scene.xml'
 Mon Apr 13 18:38:07 2026
 WARNING: mju_openResource: unknown file '../models/scene.xml'
 
+Tue May 26 14:09:24 2026
+WARNING: mju_openResource: unknown file '../models/scene_v4_weld.xml'
+
+Tue May 26 16:19:34 2026
+WARNING: mju_openResource: unknown file '../models/scene_v4_weld.xml'
+
+Tue May 26 18:12:54 2026
+WARNING: mju_openResource: unknown file '../models/scene_v4_weld_arm_only.xml'
+
+Tue May 26 18:12:54 2026
+WARNING: mju_openResource: unknown file '../models/scene_v4.xml'
+
+Tue May 26 18:14:43 2026
+WARNING: mju_openResource: unknown file '../models/scene_v4_weld_arm_only.xml'
+
+Tue May 26 18:14:43 2026
+WARNING: mju_openResource: unknown file '../models/scene_v4.xml'
+

@@ -7,6 +7,7 @@ Feel free to use in any purpose, and cite OpenLoong-Dynamics-Control in any styl
 */
 #include "GLFW_callbacks.h"
 #include <chrono>
+#include <cmath>
 #include <iostream>
 
 UIctr::UIctr(mjModel *modelIn, mjData *dataIn) {
@@ -109,6 +110,81 @@ void UIctr::setGeomGroupVisible(int group, bool visible) {
     }
 }
 
+void UIctr::setTcpTrajectoryLine(const double start[3], const double end[3])
+{
+    for (int i = 0; i < 3; ++i)
+    {
+        tcpTrajectoryStart[static_cast<size_t>(i)] = start[i];
+        tcpTrajectoryEnd[static_cast<size_t>(i)] = end[i];
+    }
+    showTcpTrajectoryLine = true;
+}
+
+void UIctr::clearTcpTrajectoryLine()
+{
+    showTcpTrajectoryLine = false;
+}
+
+void UIctr::addTcpTrajectoryLineToScene()
+{
+    if (!showTcpTrajectoryLine || scn.ngeom + 3 > scn.maxgeom)
+    {
+        return;
+    }
+
+    const mjtNum from[3] = {
+        tcpTrajectoryStart[0],
+        tcpTrajectoryStart[1],
+        tcpTrajectoryStart[2],
+    };
+    const mjtNum to[3] = {
+        tcpTrajectoryEnd[0],
+        tcpTrajectoryEnd[1],
+        tcpTrajectoryEnd[2],
+    };
+    const double dx = to[0] - from[0];
+    const double dy = to[1] - from[1];
+    const double dz = to[2] - from[2];
+    if (!std::isfinite(dx) || !std::isfinite(dy) || !std::isfinite(dz) ||
+        dx * dx + dy * dy + dz * dz < 1.0e-12)
+    {
+        return;
+    }
+
+    const mjtNum zeroSize[3] = {0.0, 0.0, 0.0};
+    const mjtNum zeroPos[3] = {0.0, 0.0, 0.0};
+    const mjtNum identityMat[9] = {
+        1.0, 0.0, 0.0,
+        0.0, 1.0, 0.0,
+        0.0, 0.0, 1.0,
+    };
+    const float lineRgba[4] = {0.05f, 0.85f, 1.0f, 0.95f};
+    mjvGeom *line = &scn.geoms[scn.ngeom++];
+    mjv_initGeom(line, mjGEOM_CAPSULE, zeroSize, zeroPos, identityMat, lineRgba);
+    mjv_connector(line, mjGEOM_CAPSULE, 0.008, from, to);
+    line->category = mjCAT_DECOR;
+    line->objtype = mjOBJ_UNKNOWN;
+    line->objid = -1;
+    line->emission = 0.25f;
+
+    const mjtNum markerSize[3] = {0.018, 0.018, 0.018};
+    const float startRgba[4] = {0.1f, 1.0f, 0.25f, 0.95f};
+    const float endRgba[4] = {1.0f, 0.2f, 0.08f, 0.95f};
+    mjvGeom *startMarker = &scn.geoms[scn.ngeom++];
+    mjv_initGeom(startMarker, mjGEOM_SPHERE, markerSize, from, identityMat, startRgba);
+    startMarker->category = mjCAT_DECOR;
+    startMarker->objtype = mjOBJ_UNKNOWN;
+    startMarker->objid = -1;
+    startMarker->emission = 0.25f;
+
+    mjvGeom *endMarker = &scn.geoms[scn.ngeom++];
+    mjv_initGeom(endMarker, mjGEOM_SPHERE, markerSize, to, identityMat, endRgba);
+    endMarker->category = mjCAT_DECOR;
+    endMarker->objtype = mjOBJ_UNKNOWN;
+    endMarker->objid = -1;
+    endMarker->emission = 0.25f;
+}
+
 void UIctr::updateScene() {
     static int slowRenderWarnings = 0;
     const auto updateStart = std::chrono::steady_clock::now();
@@ -124,6 +200,7 @@ void UIctr::updateScene() {
     buttonRead.key_j=false;
     buttonRead.key_q=false;
     buttonRead.key_e=false;
+    buttonRead.key_r=false;
     buttonRead.key_f=false;
     buttonRead.key_g=false;
     buttonRead.key_p=false;
@@ -140,6 +217,7 @@ void UIctr::updateScene() {
     // update scene and render
     const auto sceneStart = std::chrono::steady_clock::now();
     mjv_updateScene(mj_model, mj_data, &opt, NULL, &cam, mjCAT_ALL, &scn);
+    addTcpTrajectoryLineToScene();
     glfwGetFramebufferSize(window, &viewport.width, &viewport.height);
     const auto renderStart = std::chrono::steady_clock::now();
     mjr_render(viewport, &scn, &con);
@@ -233,6 +311,10 @@ void UIctr::Keyboard(int key, int scancode, int act, int mods)
 
     if (act==GLFW_RELEASE && key==GLFW_KEY_E){
         buttonRead.key_e= true;
+    }
+
+    if (act==GLFW_RELEASE && key==GLFW_KEY_R){
+        buttonRead.key_r= true;
     }
 
     if (act==GLFW_RELEASE && key==GLFW_KEY_F){
@@ -332,6 +414,7 @@ UIctr::ButtonState UIctr::getButtonState() {
     buttonRead.key_j= false;
     buttonRead.key_q= false;
     buttonRead.key_e= false;
+    buttonRead.key_r= false;
     buttonRead.key_f= false;
     buttonRead.key_g= false;
     buttonRead.key_p= false;

@@ -150,6 +150,7 @@ bool ROS2_Interface_V4_Leg::initializeCommandPublisherOnly(const ControllerConfi
     jointStatesReceived_ = false;
     commandJointPositionFeedbackEnabled_ = false;
     commandJointPositionsReceived_ = false;
+    rightArmJointPositionsReceived_ = false;
     isInitialized_ = true;
 
     if (errMsg != nullptr)
@@ -196,6 +197,7 @@ bool ROS2_Interface_V4_Leg::initializeCommandPublisherWithJointStates(const Cont
     jointStatesReceived_ = false;
     commandJointPositionFeedbackEnabled_ = true;
     commandJointPositionsReceived_ = false;
+    rightArmJointPositionsReceived_ = false;
     isInitialized_ = true;
 
     if (errMsg != nullptr)
@@ -205,7 +207,8 @@ bool ROS2_Interface_V4_Leg::initializeCommandPublisherWithJointStates(const Cont
     std::cout << "[ROS2] action command contract: Float64MultiArray[69]=[pos23][vel23][torque23], "
               << kCommandJointOrder.front() << " ... " << kCommandJointOrder.back() << std::endl;
     std::cout << "[ROS2] sim-real openloop will read " << topicJointStates_
-              << " once on P as the real-command ramp start." << std::endl;
+              << " once on P as the real-command ramp start; accepts full 23 joints or right-arm 5 joints."
+              << std::endl;
     return true;
 #else
     (void)config;
@@ -276,6 +279,69 @@ bool ROS2_Interface_V4_Leg::getLatestCommandJointPositions(std::vector<double> &
     }
 
     positions.assign(commandJointPositions_.begin(), commandJointPositions_.end());
+    if (errMsg != nullptr)
+    {
+        errMsg->clear();
+    }
+    return true;
+#else
+    (void)positions;
+    (void)maxAgeSec;
+    (void)ageSec;
+    if (errMsg != nullptr)
+    {
+        *errMsg = "ROS2 support is disabled at build time.";
+    }
+    return false;
+#endif
+}
+
+bool ROS2_Interface_V4_Leg::getLatestRightArmJointPositions(std::vector<double> &positions,
+                                                            double maxAgeSec,
+                                                            std::string *errMsg,
+                                                            double *ageSec) const
+{
+#if OPENLOONG_HAS_ROS2
+    const double timeoutSafe = std::max(0.001, maxAgeSec);
+    const auto now = Clock::now();
+    std::lock_guard<std::mutex> lock(dataMutex_);
+    if (!isInitialized_)
+    {
+        if (errMsg != nullptr)
+        {
+            *errMsg = "ROS2 interface is not initialized";
+        }
+        return false;
+    }
+    if (!rightArmJointPositionsReceived_)
+    {
+        if (errMsg != nullptr)
+        {
+            *errMsg = "no valid /joint_states position sample for the 5 right arm command joints";
+            if (!rightArmJointPositionsLastIssue_.empty())
+            {
+                *errMsg += ": " + rightArmJointPositionsLastIssue_;
+            }
+        }
+        return false;
+    }
+
+    const double age = std::chrono::duration<double>(now - lastRightArmJointPositionsTime_).count();
+    if (ageSec != nullptr)
+    {
+        *ageSec = age;
+    }
+    if (age > timeoutSafe)
+    {
+        if (errMsg != nullptr)
+        {
+            *errMsg = "latest /joint_states right-arm sample is stale: age=" +
+                      std::to_string(age) + " s, max=" + std::to_string(timeoutSafe) + " s";
+        }
+        return false;
+    }
+
+    positions.assign(rightArmJointPositions_.begin(), rightArmJointPositions_.end());
     if (errMsg != nullptr)
     {
         errMsg->clear();
@@ -594,6 +660,105 @@ void ROS2_Interface_V4_Leg::jointStatesCallback(const sensor_msgs::msg::JointSta
                 std::cerr << std::endl;
             }
         }
+
+        std::array<double, 5> rightArmPosValues{{0.0}};
+        std::array<size_t, 5> rightArmMsgIndices{{0}};
+        std::vector<std::string> rightArmIssues;
+        auto addRightArmIssue = [&rightArmIssues](const std::string &issue)
+        {
+            if (rightArmIssues.size() < 5)
+            {
+                rightArmIssues.push_back(issue);
+            }
+        };
+
+        bool rightArmPositionsValid = true;
+        int rightArmValidCount = 0;
+        for (size_t i = 0; i < rightArmPosValues.size(); i++)
+        {
+            const size_t commandIndex = 18 + i;
+            const std::string name(kCommandJointOrder[commandIndex]);
+            const auto it = nameToIndex.find(name);
+            if (it == nameToIndex.end())
+            {
+                rightArmPositionsValid = false;
+                addRightArmIssue("missing " + name);
+                continue;
+            }
+            const size_t idx = it->second;
+            if (idx >= msg->position.size())
+            {
+                rightArmPositionsValid = false;
+                addRightArmIssue(name + " missing position");
+                continue;
+            }
+            const double q = msg->position[idx];
+            if (!std::isfinite(q))
+            {
+                rightArmPositionsValid = false;
+                addRightArmIssue(name + " position NaN/Inf");
+                continue;
+            }
+            rightArmPosValues[i] = q;
+            rightArmMsgIndices[i] = idx;
+            rightArmValidCount++;
+        }
+
+        if (rightArmPositionsValid && rightArmValidCount == static_cast<int>(rightArmPosValues.size()))
+        {
+            bool shouldPrintRightArmMapping = false;
+            {
+                std::lock_guard<std::mutex> lock(dataMutex_);
+                rightArmJointPositions_ = rightArmPosValues;
+                rightArmJointPositionsReceived_ = true;
+                lastRightArmJointPositionsTime_ = Clock::now();
+                rightArmJointPositionsLastIssue_.clear();
+                if (!rightArmJointPositionsMappingPrinted_)
+                {
+                    rightArmJointPositionsMappingPrinted_ = true;
+                    shouldPrintRightArmMapping = true;
+                }
+            }
+            if (shouldPrintRightArmMapping)
+            {
+                std::cout << "[ROS2] " << topicJointStates_
+                          << " right-arm command feedback ready: 5/5 joints, position finite." << std::endl;
+                std::cout << "[ROS2] " << topicJointStates_ << " -> real right-arm command mapping:" << std::endl;
+                for (size_t i = 0; i < rightArmPosValues.size(); i++)
+                {
+                    const size_t commandIndex = 18 + i;
+                    std::cout << "  cmd[" << commandIndex << "] " << kCommandJointOrder[commandIndex]
+                              << " <- msg[" << rightArmMsgIndices[i] << "]" << std::endl;
+                }
+            }
+        }
+        else
+        {
+            std::string issueText = "ready " + std::to_string(rightArmValidCount) +
+                                    "/5 right-arm joints with finite position";
+            for (const std::string &issue : rightArmIssues)
+            {
+                issueText += "; " + issue;
+            }
+            bool shouldWarn = false;
+            size_t warnCount = 0;
+            {
+                std::lock_guard<std::mutex> lock(dataMutex_);
+                rightArmJointPositionsLastIssue_ = issueText;
+                warnCount = ++rightArmJointPositionsInvalidWarnCount_;
+                shouldWarn = (warnCount == 1 || warnCount % 5000 == 0);
+            }
+            if (shouldWarn)
+            {
+                std::cerr << "[ROS2] ignored invalid " << topicJointStates_
+                          << " right-arm feedback: " << issueText << std::endl;
+            }
+        }
+    }
+
+    if (commandJointPositionFeedbackEnabled_)
+    {
+        return;
     }
 
     std::array<double, 12> posValues{{0.0}};

@@ -9,8 +9,12 @@ doc/
 
 build/
 
-record/
-
 ref/
+
+**/build/
+**/install/
+**/log/
+
+**/record/
 
 *.out

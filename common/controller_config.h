@@ -7,6 +7,7 @@ Feel free to use in any purpose, and cite OpenLoong-Dynamics-Control in any styl
 */
 #pragma once
 
+#include <array>
 #include <string>
 
 struct ControllerConfig
@@ -87,6 +88,9 @@ struct ControllerConfig
     double weldSeamLength{0.24};
     double weldTrajectorySpeed{0.035};
     bool weldWorkpieceRandomEnabled{false};
+    std::array<double, 6> weldRightArmStartQ{0.0, -0.9, 0.2, 1.0, 0.0, 0.0};
+    std::array<double, 6> weldRightArmEndQ{0.2, -1.05, 0.1, 1.2, 0.0, 0.0};
+    double weldRightArmSpeed{0.03};
 
     // MPC model / constraint params
     double mpcMass{77.35};

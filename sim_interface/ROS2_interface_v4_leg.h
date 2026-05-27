@@ -41,6 +41,10 @@ public:
                                         double maxAgeSec,
                                         std::string *errMsg = nullptr,
                                         double *ageSec = nullptr) const;
+    bool getLatestRightArmJointPositions(std::vector<double> &positions,
+                                         double maxAgeSec,
+                                         std::string *errMsg = nullptr,
+                                         double *ageSec = nullptr) const;
     size_t getActionSubscriptionCount() const;
 
     void dataBusWrite(DataBus &busIn);
@@ -75,17 +79,21 @@ private:
     bool commandJointPositionsReceived_{false};
     bool commandJointPositionsMappingPrinted_{false};
     bool commandJointPositionFeedbackEnabled_{false};
+    bool rightArmJointPositionsReceived_{false};
+    bool rightArmJointPositionsMappingPrinted_{false};
     bool yawInited_{false};
     double yawSingle_{0.0};
     int yawRound_{0};
     size_t jointStatesInvalidWarnCount_{0};
     size_t commandJointPositionsInvalidWarnCount_{0};
+    size_t rightArmJointPositionsInvalidWarnCount_{0};
     size_t commandInvalidWarnCount_{0};
 
     mutable std::mutex dataMutex_;
     TimePoint lastImuTime_;
     TimePoint lastJointStatesTime_;
     TimePoint lastCommandJointPositionsTime_;
+    TimePoint lastRightArmJointPositionsTime_;
 
     std::array<double, 4> quatWxyz_{{1.0, 0.0, 0.0, 0.0}};
     std::array<double, 3> baseAngVel_{{0.0, 0.0, 0.0}};
@@ -94,7 +102,9 @@ private:
     std::array<double, 12> motorsVel_{{0.0}};
     std::array<double, 12> motorsEff_{{0.0}};
     std::array<double, 23> commandJointPositions_{{0.0}};
+    std::array<double, 5> rightArmJointPositions_{{0.0}};
     std::string commandJointPositionsLastIssue_;
+    std::string rightArmJointPositionsLastIssue_;
 
     static const std::array<std::string, 12> kJointNamesPinOrder;
 #endif

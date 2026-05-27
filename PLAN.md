@@ -118,3 +118,7 @@
 - 不新增启动脚本，不新增长期维护的分析脚本。
 - 不放宽 URDF/joint limit，也不放宽真机安全阈值。
 - `kp/kd` 继续作为开环/默认 PVT 参数；`closedLoopKp/closedLoopKd` 专门用于闭环 walking PVT。
+
+
+
+## 启动：`walk_mpc_wbc_leg --ros2-real`、`walk_mpc_wbc_leg --sim-real-openloop`、`walk_mpc_wbc_v4 --sim-real-openloop`  

@@ -140,6 +140,27 @@ bool loadControllerConfig(const std::string &jsonPath, ControllerConfig &outProf
     readOptionalDouble(root, "weld_seam_length", outProfile.weldSeamLength);
     readOptionalDouble(root, "weld_trajectory_speed", outProfile.weldTrajectorySpeed);
     readOptionalBool(root, "weld_workpiece_random_enabled", outProfile.weldWorkpieceRandomEnabled);
+    if (root.isMember("weld_right_arm_start_q") && root["weld_right_arm_start_q"].isArray())
+    {
+        for (Json::ArrayIndex i = 0; i < root["weld_right_arm_start_q"].size() && i < 6; ++i)
+        {
+            if (root["weld_right_arm_start_q"][i].isNumeric())
+            {
+                outProfile.weldRightArmStartQ[i] = root["weld_right_arm_start_q"][i].asDouble();
+            }
+        }
+    }
+    if (root.isMember("weld_right_arm_end_q") && root["weld_right_arm_end_q"].isArray())
+    {
+        for (Json::ArrayIndex i = 0; i < root["weld_right_arm_end_q"].size() && i < 6; ++i)
+        {
+            if (root["weld_right_arm_end_q"][i].isNumeric())
+            {
+                outProfile.weldRightArmEndQ[i] = root["weld_right_arm_end_q"][i].asDouble();
+            }
+        }
+    }
+    readOptionalDouble(root, "weld_right_arm_speed", outProfile.weldRightArmSpeed);
 
     readOptionalDouble(root, "mpc_mass", outProfile.mpcMass);
     readOptionalDouble(root, "mpc_delta_foot_front", outProfile.mpcDeltaFootFront);
@@ -202,6 +223,7 @@ bool loadControllerConfig(const std::string &jsonPath, ControllerConfig &outProf
     outProfile.contactMiu = std::clamp(outProfile.contactMiu, 0.01, 2.0);
     outProfile.weldSeamLength = std::max(outProfile.weldSeamLength, 0.01);
     outProfile.weldTrajectorySpeed = std::max(outProfile.weldTrajectorySpeed, 0.001);
+    outProfile.weldRightArmSpeed = std::max(outProfile.weldRightArmSpeed, 0.001);
     outProfile.mpcMass = std::max(outProfile.mpcMass, 1.0);
     outProfile.mpcDeltaFootFront = std::max(outProfile.mpcDeltaFootFront, 1e-4);
     outProfile.mpcDeltaFootRear = std::max(outProfile.mpcDeltaFootRear, 1e-4);

@@ -54,6 +54,8 @@ link_directories(${allLib})
 file(GLOB C_SOURCES *.c)
 file(GLOB CPP_SOURCES *.cpp algorithm/*.cpp common/*.cpp math/*.cpp sim_interface/*.cpp)
 file(GLOB HEADER_FILES *.h algorithm/*.h common/*.h math/*.h sim_interface/*.h)
+list(FILTER CPP_SOURCES EXCLUDE REGEX ".*/algorithm/wbc_priority_v4_weld\\.cpp$")
+list(FILTER HEADER_FILES EXCLUDE REGEX ".*/algorithm/wbc_priority_v4_weld\\.h$")
 set(SOURCES ${C_SOURCES} ${CPP_SOURCES} ${HEADER_FILES})
 
 #链接库
@@ -109,6 +111,9 @@ target_link_libraries(walk_mpc_wbc_joystick core mujoco qpOASES ${sysSimLibs} dl
 
 add_executable(walk_mpc_wbc_v4 demo/walk_mpc_wbc_v4.cpp)
 target_link_libraries(walk_mpc_wbc_v4 core mujoco qpOASES ${sysSimLibs} dl)
+
+add_executable(walk_mpc_wbc_v4_weld demo/walk_mpc_wbc_v4_weld.cpp)
+target_link_libraries(walk_mpc_wbc_v4_weld core mujoco qpOASES ${sysSimLibs} dl)
 
 add_executable(walk_mpc_wbc_leg demo/walk_mpc_wbc_leg.cpp)
 target_link_libraries(walk_mpc_wbc_leg core mujoco qpOASES ${sysSimLibs} dl)

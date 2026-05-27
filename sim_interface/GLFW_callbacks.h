@@ -8,6 +8,7 @@ Feel free to use in any purpose, and cite OpenLoong-Dynamics-Control in any styl
 #pragma once
 #include <mujoco/mujoco.h>
 #include <GLFW/glfw3.h>
+#include <array>
 #include <string>
 #include <memory>
 
@@ -24,6 +25,7 @@ public:
         bool key_j{false};
         bool key_q{false};
         bool key_e{false};
+        bool key_r{false};
         bool key_f{false};
         bool key_g{false};
         bool key_p{false};
@@ -46,6 +48,8 @@ public:
     void iniGLFW();
     void createWindow(const char * windowTitle, bool saveVideo);
     void setGeomGroupVisible(int group, bool visible);
+    void setTcpTrajectoryLine(const double start[3], const double end[3]);
+    void clearTcpTrajectoryLine();
     void updateScene();
 
     // keyboard callback
@@ -77,9 +81,14 @@ private:
     bool save_video{false};
 
     bool isTrack{false};
+    bool showTcpTrajectoryLine{false};
+    std::array<double, 3> tcpTrajectoryStart{{0.0, 0.0, 0.0}};
+    std::array<double, 3> tcpTrajectoryEnd{{0.0, 0.0, 0.0}};
     // UI handler
     mjvCamera cam;                      // abstract camera
     mjvOption opt;                      // visualization options
     mjvScene scn;                       // abstract scene
     mjrContext con;                     // custom GPU context
+
+    void addTcpTrajectoryLineToScene();
 };
